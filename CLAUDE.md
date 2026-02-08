@@ -1,7 +1,75 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # MIRA - Python Project Guide
 MIRA is a FastAPI application with event-driven architecture coordinating three core systems: CNS (conversation management via immutable Continuum aggregate), Working Memory (trinket-based system prompt composition), and LT_Memory (batch memory extraction/linking/refinement). PostgreSQL RLS with contextvars provides automatic user isolation - all user-scoped queries, tool access, and repository operations enforce `user_id` filtering at the database level.
 
 The User's name is Taylor.
+
+## 🖥️ Development Commands
+
+### Running the Application
+```bash
+# Start the server (default port 1993)
+python main.py --host 0.0.0.0 --port 1993
+
+# Interactive CLI client
+python talkto_mira.py
+
+# Headless CLI (single message)
+python talkto_mira.py --headless "your message"
+```
+
+### Testing, Linting, Formatting
+```bash
+pytest                                    # Run all tests
+pytest tests/test_file.py::test_function  # Run a single test
+pytest tests/cns/                         # Run tests for a module
+flake8                                    # Lint
+mypy .                                    # Type check
+black .                                   # Format
+```
+
+### Database
+```bash
+psql -U postgres -h localhost -d mira_service   # Connect to database (postgres is the superuser)
+```
+
+### Required Infrastructure
+PostgreSQL (with pgvector extension), Valkey (Redis-compatible cache), HashiCorp Vault (credential storage), spaCy `en_core_web_lg` model. Automated setup via `deploy/deploy.sh`.
+
+## 🏗️ Architecture Overview
+
+### Three Core Systems
+- **CNS (cns/)**: Conversation management. The `Continuum` is an immutable DDD aggregate root representing a conversation. `Orchestrator` (`cns/services/orchestrator.py`) is the main coordination engine. Segments represent conversation windows; after 120 min inactivity, segment collapse triggers async memory extraction and summarization.
+- **Working Memory (working_memory/)**: Dynamic system prompt composition via a trinket plugin system. Each trinket (e.g., `reminder_manager`, `proactive_memory_trinket`, `tool_loader_trinket`) contributes a section to the prompt. The `Composer` assembles them based on context window utilization.
+- **LT_Memory (lt_memory/)**: Long-term knowledge storage. Extracts discrete facts from conversations, links them via entity relationships, scores them with an activity-based decay formula, and retrieves via hybrid search (semantic + keyword via pgvector).
+
+### Key Architectural Patterns
+- **Event-Driven**: Domain events (`cns/core/events.py`) propagated via synchronous event bus. Segment collapse, memory extraction, and summary generation are decoupled through event subscriptions.
+- **User Isolation via RLS**: PostgreSQL Row Level Security enforced automatically. `contextvars` carries `user_id` from authentication through to `set_config('app.current_user_id')` on each DB session. No manual user_id filtering in queries.
+- **Tool System**: Self-registering tools in `tools/implementations/`. Tools auto-register via `@registry.register()`, are lazily loaded per conversation, and expire after 5 turns of non-use. Per-user data via `self.db` and `self.user_data_path`.
+- **API Structure**: `BaseHandler` pattern in `cns/api/`. Domain-routed actions via `/v0/api/actions`. Structured `APIResponse` with success/data/error/meta fields.
+
+### Critical Files
+- `main.py` - FastAPI entry point, middleware, startup
+- `cns/services/orchestrator.py` - Core conversation orchestration logic
+- `config/config.py` - All configuration (Pydantic BaseModel, 80+ params)
+- `config/system_prompt.txt` - MIRA's personality and behavioral directives
+- `deploy/mira_service_schema.sql` - Complete PostgreSQL schema with RLS policies
+- `tools/repo.py` - Tool registry and base class
+- `utils/database_session_manager.py` - DB connection pooling with RLS enforcement
+- `utils/user_context.py` - Contextvar for user_id propagation
+
+### API Endpoints
+```
+POST /v0/api/chat          # Send message, get response
+POST /v0/api/actions       # Domain-routed state mutations (reminders, contacts, memory, etc.)
+GET  /v0/api/data          # Data access (history, memories, dashboard)
+GET  /v0/api/health        # Health check
+GET  /v0/api/tool-config   # Tool schema retrieval
+```
 
 ## 🚨 Critical Principles (Non-Negotiable)
 ### Technical Integrity
@@ -135,13 +203,6 @@ When modifying files, edit as if new code was always intended - never reference 
 - **Testing Discipline**: Enthusiasm to fix issues shouldn't override testing discipline.
 
 ## 📚 Reference Material
-
-### Commands
-- **Tests**: `pytest` or `pytest tests/test_file.py::test_function`
-- **Lint**: `flake8`
-- **Type check**: `mypy .`
-- **Format**: `black .`
-- **Database**: Always use `psql -U postgres -h localhost -d mira_service` - postgres is the superuser, mira_service is the primary database
 
 ### Git Workflow
 - **MANDATORY**: Invoke the `git-workflow` skill BEFORE every commit
