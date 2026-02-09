@@ -100,7 +100,9 @@ class MemoryLink(BaseModel):
     """
     source_id: UUID
     target_id: UUID
-    link_type: str  # related, supports, conflicts, supersedes
+    # Supports current and legacy relationship labels.
+    # Also allows entity-style link prefixes (shares_entity:TYPE).
+    link_type: str
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
     created_at: datetime
@@ -110,11 +112,21 @@ class MemoryLink(BaseModel):
     def validate_link_type(cls, v: str) -> str:
         """Validate link type matches relationship classification types."""
         allowed = {
-            'conflicts', 'supersedes', 'causes', 'instance_of',
-            'invalidated_by', 'motivated_by'
+            "conflicts",
+            "supports",
+            "supersedes",
+            "related",
+            "causes",
+            "instance_of",
+            "invalidated_by",
+            "motivated_by",
+            "shares_entity",
         }
-        if v not in allowed:
-            raise ValueError(f"link_type must be one of {allowed}, got '{v}'")
+        if v not in allowed and not v.startswith("shares_entity:"):
+            raise ValueError(
+                "link_type must be one of "
+                f"{allowed} or start with 'shares_entity:', got '{v}'"
+            )
         return v
 
 

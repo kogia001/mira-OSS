@@ -936,7 +936,10 @@ class TestEntityOperations:
         # Verify link
         memory = db.get_memory(memory_ids[0], user_id=test_user["user_id"])
         assert len(memory.entity_links) > 0
-        assert any(link["entity_id"] == str(entity.id) for link in memory.entity_links)
+        assert any(
+            (link.get("uuid") or link.get("entity_id")) == str(entity.id)
+            for link in memory.entity_links
+        )
 
     def test_find_dormant_entities_returns_filtered_list(
         self, lt_memory_session_manager, test_user

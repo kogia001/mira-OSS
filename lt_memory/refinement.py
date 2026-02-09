@@ -10,7 +10,6 @@ memory system quality over time.
 """
 import json
 import logging
-from datetime import timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import UUID
@@ -25,7 +24,6 @@ from config.config import RefinementConfig
 from lt_memory.vector_ops import VectorOps
 from lt_memory.db_access import LTMemoryDB
 from clients.llm_provider import LLMProvider
-from utils.timezone_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -123,35 +121,17 @@ class RefinementService:
         Returns:
             List of RefinementCandidate objects
         """
-        # Get all active memories
-        all_memories = self.db.get_all_memories(include_archived=False)
+        candidate_memories = self.db.get_verbose_refinement_candidates(
+            verbose_threshold_chars=self.config.verbose_threshold_chars,
+            min_age_days=self.config.min_age_for_refinement_days,
+            refinement_cooldown_days=self.config.refinement_cooldown_days,
+            min_access_count=self.config.min_access_count_for_refinement,
+            max_rejection_count=self.config.max_rejection_count,
+            limit=limit,
+        )
 
         candidates = []
-        min_age_threshold = utc_now() - timedelta(days=self.config.min_age_for_refinement_days)
-
-        for memory in all_memories:
-            # Skip if too short
-            if len(memory.text) < self.config.verbose_threshold_chars:
-                continue
-
-            # Skip if recently refined
-            if memory.is_refined and memory.last_refined_at:
-                cooldown = timedelta(days=self.config.refinement_cooldown_days)
-                if memory.last_refined_at > utc_now() - cooldown:
-                    continue
-
-            # Skip if too new
-            if memory.created_at > min_age_threshold:
-                continue
-
-            # Skip if not accessed enough (not stable/useful)
-            if memory.access_count < self.config.min_access_count_for_refinement:
-                continue
-
-            # Skip if rejected max times (system has decided it's fine as-is)
-            if memory.refinement_rejection_count >= self.config.max_rejection_count:
-                continue
-
+        for memory in candidate_memories:
             candidate = RefinementCandidate(
                 memory_id=memory.id,
                 reason="verbose",
@@ -163,12 +143,9 @@ class RefinementService:
 
             candidates.append(candidate)
 
-        # Sort by character count descending
-        candidates.sort(key=lambda c: c.char_count, reverse=True)
+        logger.info(f"Identified {len(candidates)} verbose memories for refinement")
 
-        logger.info(f"Identified {len(candidates[:limit])} verbose memories for refinement")
-
-        return candidates[:limit]
+        return candidates
 
     def identify_consolidation_clusters(
         self,
@@ -195,21 +172,13 @@ class RefinementService:
         if max_cluster_size is None:
             max_cluster_size = self.config.max_cluster_size
 
-        # Get all active memories sorted by importance and access
-        all_memories = self.db.get_all_memories(include_archived=False)
-
-        # Filter to hub candidates:
-        # - High importance with frequent access, OR
-        # - Well-connected by semantic links (entity links don't count)
-        hub_memories = [
-            m for m in all_memories
-            if (m.importance_score >= 0.3 and m.access_count >= 5) or
-               sum(1 for link in m.inbound_links if not link.get('type', '').startswith('shares_entity:')) >= 5
-        ]
-
-        # Sort by importance descending, take top 50
-        hub_memories.sort(key=lambda m: m.importance_score, reverse=True)
-        hub_memories = hub_memories[:50]
+        # Fetch hub candidates via DB-side filtering to avoid loading all memories.
+        hub_memories = self.db.get_consolidation_hub_candidates(
+            min_importance=0.3,
+            min_access_count=5,
+            min_inbound_links=5,
+            limit=50,
+        )
 
         logger.info(f"Found {len(hub_memories)} hub candidates for clustering")
 
@@ -226,8 +195,7 @@ class RefinementService:
                 memory_id=memory.id,
                 limit=max_cluster_size,
                 similarity_threshold=self.config.consolidation_similarity_threshold,
-                min_importance=0.001,  # Filter cold storage (0.0) memories
-                user_id=user_id
+                min_importance=0.001  # Filter cold storage (0.0) memories
             )
 
             if len(similar_memories) < (min_cluster_size - 1):

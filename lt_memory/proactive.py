@@ -83,18 +83,14 @@ class ProactiveService:
             min_importance=self.config.min_importance_score
         )
 
-        # Filter by minimum importance score
-        filtered_results = [
-            memory for memory in search_results
-            if memory.importance_score >= self.config.min_importance_score
-        ][:limit]
+        primary_results = search_results[:limit]
 
-        if not filtered_results:
+        if not primary_results:
             logger.debug("No relevant memories found")
             return []
 
         # Include linked memories for context enrichment
-        expanded_results = self._include_linked_memories(filtered_results)
+        expanded_results = self._include_linked_memories(primary_results)
 
         # Rerank and filter linked memories by type, confidence, importance
         reranked_results = self._rerank_with_links(expanded_results)
@@ -102,7 +98,7 @@ class ProactiveService:
 
         logger.info(
             f"Found {len(final_results)} relevant memories "
-            f"({len(filtered_results)} primary)"
+            f"({len(primary_results)} primary)"
         )
 
         # Track access for retrieved memories to update importance scores

@@ -7,6 +7,12 @@ tool execution, working memory updates, and event publishing.
 Optimized to generate embeddings once and propagate them to all services.
 """
 import logging
+import ast
+import json
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
 
 from config import config
@@ -192,12 +198,13 @@ class ContinuumOrchestrator:
         # Generate 768d embedding for the fingerprint (query encoding)
         fingerprint_embedding = self.embeddings_provider.encode_realtime(fingerprint)
 
-        # Fresh retrieval with limit of 20
+        # Fresh retrieval using configured proactive cap
         # Memory service raises exceptions on infrastructure failures - no hedging
+        retrieval_limit = config.lt_memory.proactive.max_memories
         fresh_memories = self.memory_relevance_service.get_relevant_memories(
             fingerprint=fingerprint,
             fingerprint_embedding=fingerprint_embedding,
-            limit=20
+            limit=retrieval_limit
         )
 
         # Merge pinned + fresh, deduplicating by memory ID
@@ -227,19 +234,10 @@ class ContinuumOrchestrator:
         ))
 
         # Now compose system prompt with all context ready
-        from cns.core.events import ComposeSystemPromptEvent
-        # Reset and wait for synchronous event handler to populate
-        self._cached_content = None
-        self._non_cached_content = None
-        self._notification_center = None
-        self.event_bus.publish(ComposeSystemPromptEvent.create(
+        cached_content, non_cached_content, notification_center = self._compose_prompt_sections(
             continuum_id=str(continuum.id),
-            base_prompt=system_prompt
-        ))
-        # Since events are synchronous, content should be ready
-        cached_content = self._cached_content or ""
-        non_cached_content = self._non_cached_content or ""
-        notification_center = self._notification_center or ""
+            system_prompt=system_prompt
+        )
         
         # Get available tools - only currently enabled tools
         # With invokeother_tool, the LLM can see all available tools in working memory
@@ -250,28 +248,7 @@ class ContinuumOrchestrator:
         messages = continuum.get_messages_for_api()
 
         # Build structured system content with cache breakpoints
-        system_blocks = []
-
-        # Block 1: Cached content (base prompt + cached trinkets)
-        if cached_content:
-            system_blocks.append({
-                "type": "text",
-                "text": cached_content,
-                "cache_control": {"type": "ephemeral"}
-            })
-
-        # Block 2: Non-cached content (trinkets + temporal)
-        dynamic_parts = []
-        if non_cached_content:
-            dynamic_parts.append(non_cached_content)
-
-        # Add non-cached content block if any exists
-        if dynamic_parts:
-            system_blocks.append({
-                "type": "text",
-                "text": "\n\n".join(dynamic_parts)
-                # No cache_control - don't cache dynamic content
-            })
+        system_blocks = self._build_system_blocks(cached_content, non_cached_content)
 
         # Build complete message array with notification center injection
         # Structure: SYSTEM -> CONVERSATION [cached] -> NOTIFICATION CENTER -> CURRENT USER
@@ -309,6 +286,7 @@ class ContinuumOrchestrator:
         response_text = ""
         raw_response = None
         invoked_tool_loader = False  # Track if invokeother_tool was called during this turn
+        saw_code_execution = False
 
         # Apply tier-based model and thinking configuration
         from utils.user_context import get_user_preferences, resolve_tier, LLMProvider
@@ -377,6 +355,7 @@ class ContinuumOrchestrator:
                 # Apply remediation and continue loop
                 messages_for_llm = self._apply_overflow_remediation(
                     overflow_attempt, messages_for_llm, complete_messages, continuum, text_for_context,
+                    system_prompt=system_prompt,
                     estimated_tokens=estimated, event_type='proactive'
                 )
                 continue
@@ -399,6 +378,7 @@ class ContinuumOrchestrator:
                     if isinstance(event, ToolExecutingEvent):
                         # Log ALL tool executions for visibility
                         if event.tool_name == "code_execution":
+                            saw_code_execution = True
                             logger.info("=" * 80)
                             logger.info("🐍 CODE_EXECUTION INVOKED")
                             logger.info("=" * 80)
@@ -473,6 +453,45 @@ class ContinuumOrchestrator:
                             valkey.setex(valkey_key, 3600, raw_response._container_id)  # 1-hour TTL
                             logger.info(f"📦 Stored container ID in Valkey: {raw_response._container_id}")
 
+                        # Capture Anthropic code_execution artifact IDs for webapp downloads.
+                        artifact_file_ids = self.llm_provider.extract_code_execution_file_ids(raw_response)
+                        if artifact_file_ids:
+                            metadata["code_execution_file_ids"] = artifact_file_ids
+
+                            artifact_key = f"codeexec_artifacts:{continuum.id}"
+                            captured_at = datetime.now(timezone.utc).isoformat()
+                            try:
+                                raw_cached = valkey.get(artifact_key)
+                                cached_entries = json.loads(raw_cached) if raw_cached else []
+                                if not isinstance(cached_entries, list):
+                                    cached_entries = []
+                            except Exception:
+                                cached_entries = []
+
+                            seen_ids = {
+                                entry.get("file_id")
+                                for entry in cached_entries
+                                if isinstance(entry, dict)
+                            }
+                            for file_id in artifact_file_ids:
+                                if file_id not in seen_ids:
+                                    cached_entries.append({
+                                        "file_id": file_id,
+                                        "captured_at": captured_at,
+                                    })
+                                    seen_ids.add(file_id)
+
+                            # Keep recent history and retain for 24h.
+                            cached_entries = cached_entries[-200:]
+                            try:
+                                valkey.setex(artifact_key, 86400, json.dumps(cached_entries))
+                                logger.info(
+                                    f"🗂️ Cached {len(artifact_file_ids)} code_execution artifacts "
+                                    f"for continuum {continuum.id}"
+                                )
+                            except Exception as cache_error:
+                                logger.warning(f"Failed to cache code_execution artifacts: {cache_error}")
+
                         # Log cache metrics and track for next turn's estimation
                         if hasattr(raw_response, 'usage') and raw_response.usage:
                             usage = raw_response.usage
@@ -500,6 +519,7 @@ class ContinuumOrchestrator:
                 # Apply remediation and retry
                 messages_for_llm = self._apply_overflow_remediation(
                     overflow_attempt, messages_for_llm, complete_messages, continuum, text_for_context,
+                    system_prompt=system_prompt,
                     estimated_tokens=e.estimated_tokens, event_type='reactive'
                 )
                 # Reset events for retry
@@ -513,6 +533,10 @@ class ContinuumOrchestrator:
         if tool_calls:
             tools_used_this_turn = [call["tool_name"] for call in tool_calls]
             metadata["tools_used"] = tools_used_this_turn
+        if saw_code_execution:
+            existing_tools = metadata.get("tools_used", [])
+            if "code_execution" not in existing_tools:
+                metadata["tools_used"] = [*existing_tools, "code_execution"]
 
         # Parse tags from final response (preserve emotion tag for frontend extraction)
         parsed_tags = self.tag_parser.parse_response(response_text, preserve_tags=['my_emotion'])
@@ -539,6 +563,39 @@ class ContinuumOrchestrator:
             metadata["model_error"] = True
             metadata["model_error_reason"] = str(model_tool_error.reason)
 
+        # Strict output-claim guard:
+        # Block claims of file creation unless there is verifiable evidence.
+        claims_file_output = self._response_claims_file_creation(clean_response_text)
+        text_verified_paths = self._collect_verified_local_file_paths(clean_response_text)
+        tool_verified_paths = self._collect_verified_local_file_paths_from_tool_events(events)
+        verified_paths: List[str] = []
+        for path in text_verified_paths + tool_verified_paths:
+            if path not in verified_paths:
+                verified_paths.append(path)
+        metadata["verified_output_paths"] = verified_paths
+        metadata["output_claim_detected"] = claims_file_output
+
+        artifact_ids = metadata.get("code_execution_file_ids", []) or []
+        if claims_file_output and not verified_paths:
+            metadata["output_claim_blocked"] = True
+            if artifact_ids:
+                sample = ", ".join(artifact_ids[:3])
+                suffix = "..." if len(artifact_ids) > 3 else ""
+                clean_response_text = (
+                    "I cannot verify local filesystem creation for this turn. "
+                    "I can only verify Anthropic sandbox artifacts from code execution "
+                    f"(file_id: {sample}{suffix}). "
+                    "Use the Files tab -> Anthropic sandbox artifacts to download them."
+                )
+            else:
+                clean_response_text = (
+                    "I cannot confirm file creation for this turn because no verifiable output evidence "
+                    "was returned (no sandbox artifact file_id and no verified local file path). "
+                    "Please ask me to return only verified outputs."
+                )
+        else:
+            metadata["output_claim_blocked"] = False
+
         # Add final assistant response to continuum FIRST (before topic change handling)
         # Validate response is not blank before saving
         if not clean_response_text or not clean_response_text.strip():
@@ -560,6 +617,12 @@ class ContinuumOrchestrator:
             "surfaced_memories": [m['id'] for m in surfaced_memories],
             "pinned_memory_ids": list(pinned_ids)  # 8-char IDs for importance boost
         }
+        if metadata.get("code_execution_file_ids"):
+            assistant_metadata["code_execution_file_ids"] = metadata["code_execution_file_ids"]
+        if metadata.get("verified_output_paths"):
+            assistant_metadata["verified_output_paths"] = metadata["verified_output_paths"]
+        if metadata.get("output_claim_blocked"):
+            assistant_metadata["output_claim_blocked"] = True
 
         # Add emotion if present
         if parsed_tags.get('emotion'):
@@ -665,11 +728,293 @@ class ContinuumOrchestrator:
             f"notification center {len(event.notification_center)} chars"
         )
 
+    def _compose_prompt_sections(self, continuum_id: str, system_prompt: str) -> tuple[str, str, str]:
+        """
+        Compose working-memory prompt sections synchronously via event bus.
+
+        Returns:
+            Tuple of (cached_content, non_cached_content, notification_center)
+        """
+        from cns.core.events import ComposeSystemPromptEvent
+
+        self._cached_content = None
+        self._non_cached_content = None
+        self._notification_center = None
+        self.event_bus.publish(ComposeSystemPromptEvent.create(
+            continuum_id=continuum_id,
+            base_prompt=system_prompt
+        ))
+        return (
+            self._cached_content or "",
+            self._non_cached_content or "",
+            self._notification_center or "",
+        )
+
+    @staticmethod
+    def _build_system_blocks(cached_content: str, non_cached_content: str) -> List[Dict[str, Any]]:
+        """Build Anthropic-style structured system blocks."""
+        system_blocks: List[Dict[str, Any]] = []
+
+        if cached_content:
+            system_blocks.append({
+                "type": "text",
+                "text": cached_content,
+                "cache_control": {"type": "ephemeral"}
+            })
+
+        if non_cached_content:
+            system_blocks.append({
+                "type": "text",
+                "text": non_cached_content
+            })
+
+        return system_blocks
+
+    def _recompose_messages_for_retry(
+        self,
+        messages_for_llm: List[Dict[str, Any]],
+        cached_content: str,
+        non_cached_content: str,
+        notification_center: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Update prompt scaffolding in-place for retry while preserving trimmed history.
+
+        This is used by overflow remediation so Tier-1 memory evacuation can affect
+        the same turn without rebuilding conversation history from scratch.
+        """
+        hud_prefix = "═══════════════════════════ HUD ════════════════════════════\n"
+        updated_messages = list(messages_for_llm)
+        system_blocks = self._build_system_blocks(cached_content, non_cached_content)
+
+        if not updated_messages:
+            return [{"role": "system", "content": system_blocks}]
+
+        updated_messages[0] = {"role": "system", "content": system_blocks}
+
+        hud_index = None
+        for idx, msg in enumerate(updated_messages[1:], start=1):
+            content = msg.get("content")
+            if msg.get("role") == "assistant" and isinstance(content, str) and content.startswith(hud_prefix):
+                hud_index = idx
+                break
+
+        if notification_center:
+            hud_message = {"role": "assistant", "content": hud_prefix + notification_center}
+            if hud_index is None:
+                insert_idx = len(updated_messages) - 1 if len(updated_messages) > 1 else len(updated_messages)
+                updated_messages.insert(insert_idx, hud_message)
+            else:
+                updated_messages[hud_index] = hud_message
+        elif hud_index is not None:
+            updated_messages.pop(hud_index)
+
+        return updated_messages
+
 
     def _publish_events(self, events: List[ContinuumEvent]):
         """Publish events to event bus."""
         for event in events:
             self.event_bus.publish(event)
+
+    def _response_claims_file_creation(self, response_text: str) -> bool:
+        """
+        Detect explicit assistant claims that files were created/written.
+
+        This intentionally avoids triggering on:
+        - Echoed user transcript lines (e.g., "YOU: create file ...")
+        - Requests/instructions ("please create ...")
+        - Uncertainty/negation ("cannot confirm file creation")
+        """
+        if not response_text:
+            return False
+
+        # Ignore quoted/user-transcript lines that can appear in model output.
+        filtered_lines: List[str] = []
+        for line in response_text.splitlines():
+            low = line.strip().lower()
+            if low.startswith(("you:", "user:", "human:")):
+                continue
+            filtered_lines.append(line.strip())
+
+        text = " ".join(filtered_lines).strip().lower()
+        if not text:
+            return False
+
+        # Explicit uncertainty/negation should never count as a success claim.
+        uncertainty_or_negation = [
+            r"\bcannot confirm file creation\b",
+            r"\bno verifiable output evidence\b",
+            r"\b(no|without)\b.{0,24}\b(file|files|artifact|artifacts)\b",
+            r"\b(cannot|can't|unable|failed|did not|didn't|not)\b.{0,40}\b(create|created|write|wrote|save|saved|generated|file|files)\b",
+        ]
+        if any(re.search(pattern, text) for pattern in uncertainty_or_negation):
+            return False
+
+        mentions_file_target = any(
+            token in text
+            for token in (" file", " files", "$output_dir", "output_dir", "/tmp/", "/files/")
+        )
+        mentions_file_target = mentions_file_target or bool(
+            re.search(r"\.(txt|md|csv|json|pdf|xlsx|docx)\b", text)
+        )
+        if not mentions_file_target:
+            return False
+
+        # Strong success signals (first-person or explicit completion phrasing).
+        first_person_success = bool(
+            re.search(
+                r"\b(i|we)\s+(?:have\s+|just\s+|successfully\s+)?"
+                r"(?:created|wrote|written|saved|generated|produced|exported)\b",
+                text,
+            )
+        )
+        passive_success = bool(
+            re.search(
+                r"\b(file|files|document|documents|report)\s+"
+                r"(?:has|have|was|were)\s+(?:been\s+)?"
+                r"(?:created|written|saved|generated|produced|exported)\b",
+                text,
+            )
+        )
+        bare_success = bool(
+            re.search(
+                r"(?:^|[.!?]\s+)(?:created|wrote|written|saved|generated|produced|exported)\b",
+                text,
+            )
+        )
+
+        # If it's clearly a request/instruction and no success signal, do not block.
+        request_language = bool(
+            re.search(r"\b(please|can you|could you|should|need to|ask me to|try to)\b", text)
+        )
+        if request_language and not (first_person_success or passive_success or bare_success):
+            return False
+
+        return first_person_success or passive_success or bare_success
+
+    def _collect_verified_local_file_paths(self, response_text: str) -> List[str]:
+        """
+        Extract path-like tokens from response text and return those that exist as files.
+        """
+        if not response_text:
+            return []
+
+        path_pattern = re.compile(r"(\$OUTPUT_DIR(?:/[^\s`'\",;:()<>]+)?|/(?:[A-Za-z0-9._-]+/?)+)")
+        output_dir = os.getenv("OUTPUT_DIR", "").strip()
+        verified: List[str] = []
+        seen: set[str] = set()
+
+        for raw_token in path_pattern.findall(response_text):
+            token = raw_token.rstrip(".,!?:;)]}'\"")
+
+            if token.startswith("$OUTPUT_DIR"):
+                if not output_dir:
+                    continue
+                token = output_dir + token[len("$OUTPUT_DIR") :]
+
+            try:
+                path = Path(token).expanduser().resolve()
+            except Exception:
+                continue
+
+            candidate = str(path)
+            if candidate in seen:
+                continue
+
+            if path.exists() and path.is_file():
+                seen.add(candidate)
+                verified.append(candidate)
+
+        return verified
+
+    def _collect_verified_local_file_paths_from_tool_events(self, events: List[Any]) -> List[str]:
+        """
+        Extract verifiable file paths from successful tool result payloads.
+
+        This is used to ground file-creation claims in actual tool outputs.
+        """
+        if not events:
+            return []
+
+        from cns.core.stream_events import ToolCompletedEvent
+
+        verified: List[str] = []
+        seen: set[str] = set()
+
+        for event in events:
+            if not isinstance(event, ToolCompletedEvent):
+                continue
+
+            raw_result = getattr(event, "result", None)
+            if not isinstance(raw_result, str) or not raw_result.strip():
+                continue
+
+            payload: Optional[Dict[str, Any]] = None
+            try:
+                parsed = json.loads(raw_result)
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(raw_result)
+                    if isinstance(parsed, dict):
+                        payload = parsed
+                except Exception:
+                    payload = None
+
+            if not payload:
+                continue
+            if payload.get("success") is False:
+                continue
+
+            # For notes_tool, only treat create/overwrite-like payloads as file-output evidence.
+            if event.tool_name == "notes_tool":
+                if not (
+                    payload.get("created") is True
+                    or payload.get("overwritten") is True
+                    or "bytes_written" in payload
+                ):
+                    continue
+
+            path_candidates: List[str] = []
+
+            absolute_path = payload.get("absolute_path")
+            if isinstance(absolute_path, str) and absolute_path.strip():
+                path_candidates.append(absolute_path.strip())
+
+            file_path = payload.get("file_path")
+            if isinstance(file_path, str) and file_path.strip():
+                path_candidates.append(file_path.strip())
+
+            filepath = payload.get("filepath")
+            if isinstance(filepath, str) and filepath.strip():
+                path_candidates.append(filepath.strip())
+
+            # Some tools return root + relative path.
+            root = payload.get("root")
+            rel_path = payload.get("path")
+            if isinstance(root, str) and root.strip() and isinstance(rel_path, str) and rel_path.strip():
+                rel_candidate = Path(rel_path.strip())
+                if not rel_candidate.is_absolute():
+                    path_candidates.append(str(Path(root.strip()) / rel_candidate))
+                else:
+                    path_candidates.append(str(rel_candidate))
+
+            for token in path_candidates:
+                try:
+                    candidate_path = Path(token).expanduser().resolve()
+                except Exception:
+                    continue
+
+                candidate = str(candidate_path)
+                if candidate in seen:
+                    continue
+                if candidate_path.exists() and candidate_path.is_file():
+                    seen.add(candidate)
+                    verified.append(candidate)
+
+        return verified
 
     def _get_previous_memories(self) -> List[Dict[str, Any]]:
         """
@@ -1079,6 +1424,7 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
         complete_messages: List[Dict],
         continuum,
         text_for_context: str,
+        system_prompt: str,
         estimated_tokens: int = 0,
         event_type: str = "proactive"
     ) -> List[Dict]:
@@ -1095,6 +1441,7 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
             complete_messages: Original complete message list (for async judgment)
             continuum: Continuum object for ID
             text_for_context: User's text for evacuation context
+            system_prompt: Base system prompt used to recompose sections in Tier-1
             estimated_tokens: Token estimate that triggered overflow (for logging)
             event_type: 'proactive' or 'reactive' (for logging)
 
@@ -1120,6 +1467,19 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
                     trinket._cached_memories = evacuated
                 logger.info(f"Memory evacuation: {len(previous_memories)} -> {len(evacuated)} memories")
 
+            # Recompose prompt sections and update current retry messages in-turn.
+            # This makes Tier-1 effective for the current request instead of next turn.
+            cached_content, non_cached_content, notification_center = self._compose_prompt_sections(
+                continuum_id=str(continuum.id),
+                system_prompt=system_prompt
+            )
+            remediated_messages = self._recompose_messages_for_retry(
+                messages_for_llm=messages_for_llm,
+                cached_content=cached_content,
+                non_cached_content=non_cached_content,
+                notification_center=notification_center
+            )
+
             # Log the remediation attempt
             overflow_logger.log_overflow(
                 continuum_id=continuum.id,
@@ -1127,11 +1487,10 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
                 estimated_tokens=estimated_tokens,
                 remediation_tier=1,
                 messages_before=messages_before,
-                messages_after=messages_before,  # Messages unchanged, system prompt shrinks
+                messages_after=len(remediated_messages),
                 success=True
             )
-            # Return messages unchanged (system prompt will be rebuilt on next compose)
-            return messages_for_llm
+            return remediated_messages
 
         elif attempt == 2:
             # Remediation 2: Embedding-based topic drift pruning

@@ -1,5 +1,6 @@
 """Proactive memory trinket for displaying relevant long-term memories."""
 import logging
+from html import escape as xml_escape
 from typing import List, Dict, Any
 
 from utils.tag_parser import format_memory_id
@@ -80,10 +81,10 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
 
         raw_id = memory.get('id', '')
         formatted_id = format_memory_id(raw_id) if raw_id else 'unknown'
-        text = memory.get('text', '')
+        text = xml_escape(str(memory.get('text', '')), quote=False)
 
         # Build attributes
-        attrs = [f'id="{formatted_id}"']
+        attrs = [f'id="{xml_escape(formatted_id, quote=True)}"']
 
         confidence = memory.get('confidence') or memory.get('similarity_score')
         if confidence is not None and confidence > 0.75:
@@ -103,11 +104,11 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
         if memory.get('expires_at'):
             expires_dt = parse_time_string(memory['expires_at'])
             expiry_date = format_datetime(expires_dt, 'date')
-            temporal_attrs.append(f'expires="{expiry_date}"')
+            temporal_attrs.append(f'expires="{xml_escape(expiry_date, quote=True)}"')
         if memory.get('happens_at'):
             happens_dt = parse_time_string(memory['happens_at'])
             event_date = format_datetime(happens_dt, 'date')
-            temporal_attrs.append(f'happens="{event_date}"')
+            temporal_attrs.append(f'happens="{xml_escape(event_date, quote=True)}"')
         if temporal_attrs:
             parts.append(f"<temporal {' '.join(temporal_attrs)}/>")
 
@@ -158,12 +159,16 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
             # Build attributes
             raw_id = linked.get('id', '')
             formatted_id = format_memory_id(raw_id) if raw_id else 'unknown'
-            attrs = [f'id="{formatted_id}"', f'link_type="{link_type}"']
+            attrs = [
+                f'id="{xml_escape(formatted_id, quote=True)}"',
+                f'link_type="{xml_escape(str(link_type), quote=True)}"',
+            ]
             if confidence is not None and confidence > 0.75:
                 attrs.append(f'confidence="{int(confidence * 100)}"')
 
             parts.append(f"<linked_memory {' '.join(attrs)}>")
-            parts.append(f"<text>{linked.get('text', '')}</text>")
+            linked_text = xml_escape(str(linked.get('text', '')), quote=False)
+            parts.append(f"<text>{linked_text}</text>")
 
             # Nested linked memories (recursive)
             nested_linked = linked.get('linked_memories', [])

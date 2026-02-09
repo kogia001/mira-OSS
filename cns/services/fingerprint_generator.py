@@ -218,7 +218,7 @@ class FingerprintGenerator:
             memory_id = memory.get('id', '')
             importance = memory.get('importance_score', 0.5)
             formatted_id = format_memory_id(memory_id)
-            dots = self._importance_to_dots(importance)
+            dots = FingerprintGenerator._importance_to_dots(importance)
             if text and formatted_id:
                 lines.append(f"- {formatted_id} [{dots}] - {text}")
             elif text:
@@ -273,6 +273,18 @@ class FingerprintGenerator:
         if not previous_memories:
             return fingerprint, pinned_ids
 
+        # Use ID mode for real UUID-like memory IDs, legacy text mode otherwise.
+        use_id_mode = False
+        for memory in previous_memories:
+            raw_id = str(memory.get('id', '')).strip()
+            clean_id = raw_id.replace('-', '')
+            if (
+                len(clean_id) >= 8 and
+                re.fullmatch(r'[a-fA-F0-9]{8,}', clean_id) is not None
+            ):
+                use_id_mode = True
+                break
+
         retention_match = re.search(
             r'<memory_retention>(.*?)</memory_retention>',
             response_text,
@@ -281,23 +293,70 @@ class FingerprintGenerator:
 
         if retention_match:
             retention_block = retention_match.group(1)
-            # Extract 8-char IDs from lines starting with [x]
-            # Format: [x] - mem_a1B2c3D4 - memory text
-            # UUIDs only contain hex chars (0-9, a-f)
+            # Preferred format: [x] - mem_a1B2c3D4 - memory text
             id_matches = re.findall(
                 r'\[x\]\s*-\s*mem_([a-fA-F0-9]{8})',
                 retention_block,
                 re.IGNORECASE
             )
-            pinned_ids = {match.lower() for match in id_matches}
-            logger.debug(f"Parsed {len(pinned_ids)} pinned IDs from response")
+            if id_matches:
+                pinned_ids = {match.lower() for match in id_matches}
+                logger.debug(f"Parsed {len(pinned_ids)} pinned IDs from response")
+            else:
+                # Legacy format fallback: [x] Memory text
+                retained_texts: Set[str] = set()
+                for line in retention_block.splitlines():
+                    text_match = re.match(
+                        r'^\s*\[x\]\s*(?:-\s*)?(.*?)\s*$',
+                        line,
+                        re.IGNORECASE,
+                    )
+                    if not text_match:
+                        continue
+                    retained_text = text_match.group(1).strip()
+                    if not retained_text:
+                        continue
+                    retained_text = re.sub(
+                        r'^mem_[a-fA-F0-9]{8}\s*-\s*',
+                        '',
+                        retained_text,
+                        flags=re.IGNORECASE,
+                    ).strip()
+                    if retained_text:
+                        retained_texts.add(retained_text)
+
+                if use_id_mode:
+                    text_to_id: Dict[str, str] = {}
+                    for memory in previous_memories:
+                        text = str(memory.get('text', '')).strip()
+                        formatted_id = format_memory_id(memory.get('id', ''))
+                        if text and formatted_id:
+                            text_to_id[text] = formatted_id.replace('mem_', '').lower()
+                    pinned_ids = {
+                        text_to_id[text]
+                        for text in retained_texts
+                        if text in text_to_id
+                    }
+                else:
+                    pinned_ids = retained_texts
         else:
-            # Parse failure: don't boost any memories (no explicit signal)
-            # Retention filtering will fall back to keeping pinned memories from last turn
+            # Conservative fallback when retention block is missing:
+            # keep all previously surfaced memories.
             logger.warning(
-                "No <memory_retention> block found in response, no memories pinned"
+                "No <memory_retention> block found in response, keeping all memories"
             )
-            # pinned_ids stays empty - no new pins without explicit LLM decision
+            if use_id_mode:
+                pinned_ids = {
+                    format_memory_id(memory.get('id', '')).replace('mem_', '').lower()
+                    for memory in previous_memories
+                    if format_memory_id(memory.get('id', ''))
+                }
+            else:
+                pinned_ids = {
+                    str(memory.get('text', '')).strip()
+                    for memory in previous_memories
+                    if str(memory.get('text', '')).strip()
+                }
 
         return fingerprint, pinned_ids
 

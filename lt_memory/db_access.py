@@ -435,6 +435,109 @@ class LTMemoryDB:
                 results = session.execute_query(base_query, {})
                 return [Memory(**row) for row in results]
 
+    def get_verbose_refinement_candidates(
+        self,
+        verbose_threshold_chars: int,
+        min_age_days: int,
+        refinement_cooldown_days: int,
+        min_access_count: int,
+        max_rejection_count: int,
+        limit: int,
+        user_id: Optional[str] = None
+    ) -> List[Memory]:
+        """
+        Fetch verbose-memory refinement candidates using database-side filtering.
+
+        Args:
+            verbose_threshold_chars: Minimum memory text length to qualify
+            min_age_days: Minimum memory age in days
+            refinement_cooldown_days: Cooldown window after last refinement
+            min_access_count: Minimum access_count to consider memory stable
+            max_rejection_count: Exclude memories with this many+ refinement rejections
+            limit: Maximum candidates to return
+            user_id: User ID (uses ambient context if None)
+
+        Returns:
+            List of Memory models ordered by text length DESC
+        """
+        resolved_user_id = self._resolve_user_id(user_id)
+
+        with self.session_manager.get_session(resolved_user_id) as session:
+            query = """
+            SELECT *
+            FROM memories
+            WHERE is_archived = FALSE
+              AND char_length(text) >= %(verbose_threshold_chars)s
+              AND access_count >= %(min_access_count)s
+              AND refinement_rejection_count < %(max_rejection_count)s
+              AND created_at <= NOW() - (INTERVAL '1 day' * %(min_age_days)s)
+              AND (
+                    is_refined = FALSE
+                    OR last_refined_at IS NULL
+                    OR last_refined_at <= NOW() - (INTERVAL '1 day' * %(refinement_cooldown_days)s)
+                  )
+            ORDER BY char_length(text) DESC
+            LIMIT %(limit)s
+            """
+
+            results = session.execute_query(query, {
+                'verbose_threshold_chars': verbose_threshold_chars,
+                'min_age_days': min_age_days,
+                'refinement_cooldown_days': refinement_cooldown_days,
+                'min_access_count': min_access_count,
+                'max_rejection_count': max_rejection_count,
+                'limit': limit,
+            })
+            return [Memory(**row) for row in results]
+
+    def get_consolidation_hub_candidates(
+        self,
+        min_importance: float = 0.3,
+        min_access_count: int = 5,
+        min_inbound_links: int = 5,
+        limit: int = 50,
+        user_id: Optional[str] = None
+    ) -> List[Memory]:
+        """
+        Fetch consolidation "hub" memories using database-side filtering.
+
+        Args:
+            min_importance: Minimum importance score for high-value hubs
+            min_access_count: Minimum access_count for high-value hubs
+            min_inbound_links: Minimum inbound relationship links for hub eligibility
+            limit: Maximum hub candidates to return
+            user_id: User ID (uses ambient context if None)
+
+        Returns:
+            List of hub Memory models ordered by importance_score DESC
+        """
+        resolved_user_id = self._resolve_user_id(user_id)
+
+        with self.session_manager.get_session(resolved_user_id) as session:
+            query = """
+            SELECT m.*
+            FROM memories m
+            WHERE m.is_archived = FALSE
+              AND (
+                    (m.importance_score >= %(min_importance)s AND m.access_count >= %(min_access_count)s)
+                    OR (
+                        SELECT COUNT(*)
+                        FROM jsonb_array_elements(COALESCE(m.inbound_links, '[]'::jsonb)) AS link
+                        WHERE COALESCE(link->>'type', '') NOT LIKE 'shares_entity:%%'
+                    ) >= %(min_inbound_links)s
+                  )
+            ORDER BY m.importance_score DESC
+            LIMIT %(limit)s
+            """
+
+            results = session.execute_query(query, {
+                'min_importance': min_importance,
+                'min_access_count': min_access_count,
+                'min_inbound_links': min_inbound_links,
+                'limit': limit,
+            })
+            return [Memory(**row) for row in results]
+
     # ==================== SCORING OPERATIONS ====================
 
     def _recalculate_importance_scores(
@@ -1135,26 +1238,34 @@ class LTMemoryDB:
                     'name': entity_name
                 }
 
-                session.execute_update("""
+                memory_updated = session.execute_update("""
                     UPDATE memories
                     SET entity_links = COALESCE(entity_links, '[]'::jsonb) || %(entity_obj)s::jsonb,
                         updated_at = NOW()
                     WHERE id = %(memory_id)s
+                      AND is_archived = FALSE
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM jsonb_array_elements(COALESCE(entity_links, '[]'::jsonb)) AS elem
+                          WHERE elem->>'uuid' = %(entity_id)s
+                      )
                 """, {
                     'memory_id': str(memory_id),
+                    'entity_id': str(entity_id),
                     'entity_obj': json.dumps(entity_link_obj)
                 })
 
-                # Update entity link_count and last_linked_at
-                session.execute_update("""
-                    UPDATE entities
-                    SET link_count = link_count + 1,
-                        last_linked_at = NOW(),
-                        updated_at = NOW()
-                    WHERE id = %(entity_id)s
-                """, {
-                    'entity_id': str(entity_id)
-                })
+                # Update counters only when a new memory->entity link was inserted.
+                if memory_updated > 0:
+                    session.execute_update("""
+                        UPDATE entities
+                        SET link_count = link_count + 1,
+                            last_linked_at = NOW(),
+                            updated_at = NOW()
+                        WHERE id = %(entity_id)s
+                    """, {
+                        'entity_id': str(entity_id)
+                    })
 
     def find_dormant_entities(
         self,
@@ -1660,7 +1771,7 @@ class LTMemoryDB:
                 DELETE FROM extraction_batches
                 WHERE user_id = %(user_id)s
                   AND status IN ('failed', 'expired', 'cancelled')
-                  AND created_at < NOW() - INTERVAL '%(retention_hours)s hours'
+                  AND created_at < NOW() - (INTERVAL '1 hour' * %(retention_hours)s)
                 """
                 result = session.execute_update(query, {
                     'user_id': resolved_user_id,
@@ -1859,7 +1970,7 @@ class LTMemoryDB:
                 DELETE FROM post_processing_batches
                 WHERE user_id = %(user_id)s
                   AND status IN ('failed', 'expired', 'cancelled')
-                  AND created_at < NOW() - INTERVAL '%(retention_hours)s hours'
+                  AND created_at < NOW() - (INTERVAL '1 hour' * %(retention_hours)s)
                 """
                 result = session.execute_update(query, {
                     'user_id': resolved_user_id,

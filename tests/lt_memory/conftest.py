@@ -5,9 +5,30 @@ Provides session managers, database access, and test users for lt_memory tests.
 """
 
 import pytest
+import os
+from pathlib import Path
 from tests.fixtures.core import TEST_USER_ID, ensure_test_user_exists
 from utils.user_context import set_current_user_id, clear_user_context
 from utils.database_session_manager import LTMemorySessionManager
+
+_HAS_LT_MEMORY_INTEGRATION_ENV = bool(
+    os.getenv("VAULT_ADDR") and os.getenv("VAULT_ROLE_ID") and os.getenv("VAULT_SECRET_ID")
+)
+_LT_MEMORY_TEST_DIR = Path(__file__).resolve().parent
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip lt_memory integration tests when Vault-backed env is unavailable."""
+    if _HAS_LT_MEMORY_INTEGRATION_ENV:
+        return
+
+    skip_marker = pytest.mark.skip(
+        reason="lt_memory integration tests require VAULT_ADDR, VAULT_ROLE_ID, and VAULT_SECRET_ID"
+    )
+    for item in items:
+        item_path = Path(str(item.fspath)).resolve()
+        if item_path.is_relative_to(_LT_MEMORY_TEST_DIR):
+            item.add_marker(skip_marker)
 
 
 @pytest.fixture

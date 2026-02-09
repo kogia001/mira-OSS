@@ -48,7 +48,8 @@ class HybridSearcher:
         self.db = db_access
         self._entity_extractor = entity_extractor
         self._entity_extractor_initialized = entity_extractor is not None
-        self._cached_user_entities = None  # Cache for entity matching within session
+        self._cached_user_entities = None
+        self._cached_entities_user_id: Optional[str] = None
 
     @property
     def entity_extractor(self):
@@ -404,10 +405,19 @@ class HybridSearcher:
         Returns:
             Dict mapping entity_id -> (match_confidence, entity_type)
         """
+        resolved_user_id = self.db._resolve_user_id()
+
         # Fetch limited set of top entities for fuzzy matching
-        # Use cached entities if available, otherwise fetch top 100
-        if self._cached_user_entities is None:
-            self._cached_user_entities = self.db.get_active_entities(limit=100)
+        # Use cached entities if available for this user, otherwise fetch top 100
+        if (
+            self._cached_user_entities is None
+            or self._cached_entities_user_id != resolved_user_id
+        ):
+            self._cached_user_entities = self.db.get_active_entities(
+                limit=100,
+                user_id=resolved_user_id,
+            )
+            self._cached_entities_user_id = resolved_user_id
 
         if not self._cached_user_entities:
             return {}
@@ -473,5 +483,6 @@ class HybridSearcher:
         return total_boost
 
     def clear_entity_cache(self):
-        """Clear cached user entities. Call when switching user context."""
+        """Clear cached entities and user-scoping metadata."""
         self._cached_user_entities = None
+        self._cached_entities_user_id = None

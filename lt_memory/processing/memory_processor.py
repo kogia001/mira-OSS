@@ -365,7 +365,17 @@ class MemoryProcessor:
         # FIX: Normalize relationship type
         relationship_type = memory_dict.get("relationship_type")
         if relationship_type:
-            valid_types = {"conflicts", "supports", "supersedes", "related", "null"}
+            valid_types = {
+                "conflicts",
+                "supports",
+                "supersedes",
+                "related",
+                "causes",
+                "instance_of",
+                "invalidated_by",
+                "motivated_by",
+                "null",
+            }
             if relationship_type not in valid_types:
                 logger.warning(f"Fixing invalid relationship_type '{relationship_type}' -> null")
                 memory_dict["relationship_type"] = None
