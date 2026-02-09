@@ -868,6 +868,8 @@ class ExtractionService:
                     model_override=self.config.extraction_model,
                     temperature=self.config.extraction_temperature,
                     max_tokens=self.config.max_extraction_tokens,
+                    thinking_enabled=self.config.extraction_thinking_enabled,
+                    thinking_budget=self.config.extraction_thinking_budget,
                     top_p=0.3,
                     frequency_penalty=0.5,
                     response_format={"type": "json_object"}

@@ -170,20 +170,26 @@ class BatchExecutionStrategy(ExecutionStrategy):
             if not payload.messages:
                 continue
 
+            params = {
+                "model": self.extraction_config.extraction_model,
+                "max_tokens": self.extraction_config.max_extraction_tokens,
+                "temperature": self.extraction_config.extraction_temperature,
+                "system": [{
+                    "type": "text",
+                    "text": payload.system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }],
+                "messages": payload.messages
+            }
+            if self.extraction_config.extraction_thinking_enabled:
+                params["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": self.extraction_config.extraction_thinking_budget,
+                }
+
             request = {
                 "custom_id": f"{user_id}_{chunk.chunk_index}",
-                "params": {
-                    "model": self.extraction_config.extraction_model,
-                    "max_tokens": self.extraction_config.max_extraction_tokens,
-                    "temperature": self.extraction_config.extraction_temperature,
-                    "thinking": {"type": "enabled", "budget_tokens": 1024},
-                    "system": [{
-                        "type": "text",
-                        "text": payload.system_prompt,
-                        "cache_control": {"type": "ephemeral"}
-                    }],
-                    "messages": payload.messages
-                }
+                "params": params
             }
 
             requests.append(request)
@@ -273,11 +279,12 @@ class ImmediateExecutionStrategy(ExecutionStrategy):
                     continue
 
                 # Call LLM directly (routes to OpenAI fallback)
+                extraction_config = self.extraction_engine.config
                 response = self.llm_provider.generate_response(
                     messages=[{"role": "user", "content": payload.user_prompt}],
                     system_override=payload.system_prompt,
-                    thinking_enabled=True,
-                    thinking_budget=1024
+                    thinking_enabled=extraction_config.extraction_thinking_enabled,
+                    thinking_budget=extraction_config.extraction_thinking_budget
                 )
 
                 # Extract text from response

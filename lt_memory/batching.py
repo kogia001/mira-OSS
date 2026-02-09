@@ -556,20 +556,26 @@ class BatchingService:
             if not messages:
                 continue
 
+            params = {
+                "model": self.extraction.config.extraction_model,
+                "max_tokens": self.extraction.config.max_extraction_tokens,
+                "temperature": self.extraction.config.extraction_temperature,
+                "system": [{
+                    "type": "text",
+                    "text": self.extraction_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }],
+                "messages": messages
+            }
+            if self.extraction.config.extraction_thinking_enabled:
+                params["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": self.extraction.config.extraction_thinking_budget,
+                }
+
             request = {
                 "custom_id": f"{user_id}_{chunk.chunk_index}",
-                "params": {
-                    "model": self.extraction.config.extraction_model,
-                    "max_tokens": self.extraction.config.max_extraction_tokens,
-                    "temperature": self.extraction.config.extraction_temperature,
-                    "thinking": {"type": "enabled", "budget_tokens": 1024},
-                    "system": [{
-                        "type": "text",
-                        "text": self.extraction_prompt,
-                        "cache_control": {"type": "ephemeral"}
-                    }],
-                    "messages": messages
-                }
+                "params": params
             }
 
             requests.append(request)
@@ -642,8 +648,8 @@ class BatchingService:
                 response = self.llm_provider.generate_response(
                     messages=messages,
                     system_override=self.extraction_prompt,
-                    thinking_enabled=True,
-                    thinking_budget=1024
+                    thinking_enabled=self.extraction.config.extraction_thinking_enabled,
+                    thinking_budget=self.extraction.config.extraction_thinking_budget
                 )
 
                 # Extract text from response

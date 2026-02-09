@@ -153,6 +153,19 @@ class HybridEmbeddingsProvider:
 
         return embeddings
 
+    def embed_query(self, text: str) -> List[float]:
+        """
+        Backward-compatible query embedding alias used by overflow handlers.
+
+        Returns a 1D float list even if underlying provider returns ndarray.
+        """
+        embedding = self.encode_realtime(text)
+        if isinstance(embedding, np.ndarray):
+            if embedding.ndim > 1:
+                embedding = embedding[0]
+            return embedding.astype(np.float32).tolist()
+        return embedding
+
     def encode_deep(self,
                     texts: Union[str, List[str]],
                     batch_size: Optional[int] = None) -> np.ndarray:
