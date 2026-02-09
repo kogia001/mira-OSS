@@ -91,7 +91,7 @@ class ToolConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether tools are enabled")
     timeout: int = Field(default=30, description="Default timeout in seconds for tool operations")
     essential_tools: List[str] = Field(
-        default=["web_tool", "invokeother_tool", "getcontext_tool"],
+        default=["web_tool", "invokeother_tool", "getcontext_tool", "notes_tool"],
         description="List of essential tools (warns if disabled)"
     )
     invokeother_tool: InvokeOtherToolConfig = Field(

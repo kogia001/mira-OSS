@@ -24,6 +24,7 @@ from config.config_manager import config
 from cns.api import data, actions, health, tool_config
 from cns.api import chat as chat_api
 from api import federation as federation_api
+from api import webapp as webapp_api
 from cns.api.base import APIError, create_error_response, generate_request_id
 from utils.scheduler_service import scheduler_service
 from utils.scheduled_tasks import initialize_all_scheduled_tasks
@@ -504,6 +505,7 @@ def create_app() -> FastAPI:
     app.include_router(actions.router, prefix="/v0/api", tags=["actions"])
     app.include_router(tool_config.router, prefix="/v0/api", tags=["tool_config"])
     app.include_router(federation_api.router, prefix="/v0/api", tags=["federation"])
+    app.include_router(webapp_api.router, tags=["webapp"])
 
     
     return app

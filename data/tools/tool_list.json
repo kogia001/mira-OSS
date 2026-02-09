@@ -2,6 +2,13 @@
   {
     "dependencies": [],
     "description": "Base class for all tools",
+    "name": "codex_wsl",
+    "parameters": {},
+    "required_parameters": []
+  },
+  {
+    "dependencies": [],
+    "description": "Base class for all tools",
     "name": "contacts_tool",
     "parameters": {},
     "required_parameters": []
@@ -57,6 +64,13 @@
   },
   {
     "dependencies": [],
+    "description": "Read/search markdown notes and create notes within allowed root directories.",
+    "name": "notes_tool",
+    "parameters": {},
+    "required_parameters": []
+  },
+  {
+    "dependencies": [],
     "description": "\n    Manages virtual pager devices for sending and receiving short messages. Use this tool when the user\n    wants to simulate pager messaging, send urgent notifications, or manage a virtual pager system.\n    \n    IMPORTANT: This tool requires parameters to be passed as a JSON string in the \"kwargs\" field.\n    The tool supports these operations:\n    \n    1. register_device: Create a new virtual pager device.\n       - Required: name (friendly name for the pager)\n       - Optional: description (details about the pager)\n       - Returns the created pager device with unique ID (format: PAGER-XXXX)\n\n    2. register_username: Register a username for federated pager addressing.\n       - Required: username (3-20 alphanumeric characters, e.g., \"taylor\")\n       - One username per user - enables receiving federated messages and local username routing\n       - Returns the registered username and federated address (username@server)\n\n    3. send_message: Send a message from one pager to another.\n       - Required: sender_id, recipient_id, content\n       - Optional: priority (0=normal, 1=high, 2=urgent), location, expiry_hours\n       - Content over 300 chars will be AI-distilled to fit pager constraints\n       - Returns the sent message details\n    \n    3. get_received_messages: Get messages received by a specific pager.\n       - Required: pager_id (the pager device ID)\n       - Optional: unread_only (boolean), include_expired (boolean)\n       - Returns list of received messages\n    \n    4. get_sent_messages: Get messages sent from a specific pager.\n       - Required: pager_id (the pager device ID)\n       - Optional: include_expired (boolean)\n       - Returns list of sent messages\n       \n    5. mark_message_read: Mark a message as read.\n       - Required: message_id\n       - Returns the updated message\n       \n    6. get_devices: List all registered pager devices.\n       - Optional: active_only (boolean, default true)\n       - Returns list of pager devices\n       \n    7. deactivate_device: Deactivate a pager device.\n       - Required: pager_id\n       - Returns confirmation of deactivation\n       \n    8. cleanup_expired: Remove expired messages from the system.\n       - Returns count of messages cleaned up\n    \n    9. list_trusted_devices: List devices trusted by a specific pager.\n       - Required: pager_id\n       - Returns list of trusted devices with fingerprints and status\n       \n    10. revoke_trust: Revoke trust for a specific device (allows re-establishing trust).\n        - Required: pager_id, untrusted_device_id\n        - Returns confirmation of trust revocation\n        \n    11. send_location: Send a location pin message from one pager to another.\n        - Required: sender_id, recipient_id\n        - Optional: priority (0=normal, 1=high, 2=urgent), message (brief note), device_secret\n        - Automatically includes current location as a pin\n        - Returns the sent location message\n       \n    The tool uses AI to automatically distill long messages to fit pager constraints while\n    preserving the essential information. Location information can be attached to messages\n    for context, and priority levels help indicate message urgency.\n    \n    Location pins are a special feature that allow sending your current coordinates as a \n    message, perfect for emergencies or meetups. The location is formatted with both a \n    human-readable address and technical coordinates.\n    ",
     "name": "pager_tool",
     "parameters": {},
@@ -73,6 +87,13 @@
     "dependencies": [],
     "description": "Base class for all tools",
     "name": "reminder_tool",
+    "parameters": {},
+    "required_parameters": []
+  },
+  {
+    "dependencies": [],
+    "description": "Base class for all tools",
+    "name": "timezone_manager",
     "parameters": {},
     "required_parameters": []
   },
