@@ -195,6 +195,12 @@ def webapp_index() -> str:
       gap: 10px;
       margin: 10px 0;
     }
+    .row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 10px 0;
+    }
     input, button, textarea {
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -296,6 +302,7 @@ def webapp_index() -> str:
     @media (max-width: 760px) {
       .chat-input-row { grid-template-columns: 1fr; }
       .row { grid-template-columns: 1fr; }
+      .row-2 { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -313,6 +320,7 @@ def webapp_index() -> str:
       <div class="tabs">
         <button class="tab active" id="chatTab" data-tab="chat">Chat</button>
         <button class="tab" id="filesTab" data-tab="files">Files</button>
+        <button class="tab" id="domaindocsTab" data-tab="domaindocs">DomainDocs</button>
       </div>
 
       <div class="panel active" id="chatPanel">
@@ -374,6 +382,49 @@ def webapp_index() -> str:
           <tbody id="artifactRows"></tbody>
         </table>
       </div>
+
+      <div class="panel" id="domaindocsPanel">
+        <div class="muted">DomainDoc editor via <span class="mono">POST /v0/api/actions</span> (<span class="mono">domain_knowledge</span>)</div>
+        <div class="status" id="domaindocsStatus"></div>
+
+        <div class="row">
+          <select id="docSelect"></select>
+          <button class="secondary" id="reloadDocsBtn">Reload Docs</button>
+        </div>
+
+        <div class="row-2">
+          <input id="newDocLabelInput" placeholder="new_doc_label" />
+          <input id="newDocDescInput" placeholder="Description for the new DomainDoc" />
+        </div>
+        <div class="row">
+          <button id="createDocBtn">Create Doc</button>
+          <button class="secondary" id="enableDocBtn">Enable</button>
+        </div>
+        <div class="row">
+          <div class="muted" id="docMeta">Select a DomainDoc to edit sections.</div>
+          <button class="secondary" id="disableDocBtn">Disable</button>
+        </div>
+
+        <hr style="border:0;border-top:1px solid var(--line);margin:10px 0;" />
+
+        <div class="row">
+          <select id="sectionSelect"></select>
+          <button class="secondary" id="reloadSectionsBtn">Reload Sections</button>
+        </div>
+        <div class="row">
+          <input id="newSectionInput" placeholder="New section header (e.g. API_NOTES)" />
+          <button class="secondary" id="createSectionBtn">Create Section</button>
+        </div>
+        <div class="row">
+          <button class="secondary" id="expandSectionBtn">Expand</button>
+          <button class="secondary" id="collapseSectionBtn">Collapse</button>
+        </div>
+
+        <div class="row">
+          <textarea id="sectionContentInput" placeholder="Section content..." style="min-height: 260px;"></textarea>
+          <button id="saveSectionBtn">Save Section</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -383,8 +434,10 @@ def webapp_index() -> str:
 
     const chatTab = document.getElementById('chatTab');
     const filesTab = document.getElementById('filesTab');
+    const domaindocsTab = document.getElementById('domaindocsTab');
     const chatPanel = document.getElementById('chatPanel');
     const filesPanel = document.getElementById('filesPanel');
+    const domaindocsPanel = document.getElementById('domaindocsPanel');
 
     const chatStatusEl = document.getElementById('chatStatus');
     const loadOlderBtn = document.getElementById('loadOlderBtn');
@@ -405,10 +458,31 @@ def webapp_index() -> str:
     const artifactRowsEl = document.getElementById('artifactRows');
     const reloadArtifactsBtn = document.getElementById('reloadArtifactsBtn');
 
+    const domaindocsStatusEl = document.getElementById('domaindocsStatus');
+    const docSelect = document.getElementById('docSelect');
+    const reloadDocsBtn = document.getElementById('reloadDocsBtn');
+    const newDocLabelInput = document.getElementById('newDocLabelInput');
+    const newDocDescInput = document.getElementById('newDocDescInput');
+    const createDocBtn = document.getElementById('createDocBtn');
+    const enableDocBtn = document.getElementById('enableDocBtn');
+    const disableDocBtn = document.getElementById('disableDocBtn');
+    const docMetaEl = document.getElementById('docMeta');
+    const sectionSelect = document.getElementById('sectionSelect');
+    const reloadSectionsBtn = document.getElementById('reloadSectionsBtn');
+    const newSectionInput = document.getElementById('newSectionInput');
+    const createSectionBtn = document.getElementById('createSectionBtn');
+    const expandSectionBtn = document.getElementById('expandSectionBtn');
+    const collapseSectionBtn = document.getElementById('collapseSectionBtn');
+    const sectionContentInput = document.getElementById('sectionContentInput');
+    const saveSectionBtn = document.getElementById('saveSectionBtn');
+
     const COMMAND_HELP_TEXT = '/tier [name] - view or change model tier\\n/domaindoc list|create|enable|disable\\n/collapse - end current conversation segment\\n/status\\n/clear\\nquit, exit, bye';
 
     let currentPath = '';
     let currentRoot = '';
+    let currentDocLabel = '';
+    let currentSectionHeader = '';
+    let docsCache = [];
     let historyBootstrapped = false;
     let historyOffset = 0;
     let historyHasMore = false;
@@ -427,10 +501,14 @@ def webapp_index() -> str:
 
     function setTab(tabName) {
       const chatActive = tabName === 'chat';
+      const filesActive = tabName === 'files';
+      const domaindocsActive = tabName === 'domaindocs';
       chatTab.classList.toggle('active', chatActive);
-      filesTab.classList.toggle('active', !chatActive);
+      filesTab.classList.toggle('active', filesActive);
+      domaindocsTab.classList.toggle('active', domaindocsActive);
       chatPanel.classList.toggle('active', chatActive);
-      filesPanel.classList.toggle('active', !chatActive);
+      filesPanel.classList.toggle('active', filesActive);
+      domaindocsPanel.classList.toggle('active', domaindocsActive);
     }
 
     function createBubble(who, text) {
@@ -1074,6 +1152,181 @@ def webapp_index() -> str:
       }
     }
 
+    function setDomaindocsStatus(message, isError = false) {
+      domaindocsStatusEl.textContent = message || '';
+      domaindocsStatusEl.style.color = isError ? 'var(--danger)' : 'var(--muted)';
+    }
+
+    function renderDocOptions(docs, selectedLabel) {
+      docSelect.innerHTML = '';
+      if (!docs || docs.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No DomainDocs found';
+        docSelect.appendChild(opt);
+        return;
+      }
+      for (const doc of docs) {
+        const opt = document.createElement('option');
+        opt.value = doc.label;
+        opt.textContent = (doc.enabled ? '[on] ' : '[off] ') + doc.label;
+        if (doc.label === selectedLabel) {
+          opt.selected = true;
+        }
+        docSelect.appendChild(opt);
+      }
+    }
+
+    function renderSectionOptions(sections, selectedHeader) {
+      sectionSelect.innerHTML = '';
+      if (!sections || sections.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No sections';
+        sectionSelect.appendChild(opt);
+        return;
+      }
+      for (const section of sections) {
+        const opt = document.createElement('option');
+        opt.value = section.header;
+        const collapsedTag = section.collapsed ? ' [collapsed]' : '';
+        opt.textContent = section.header + collapsedTag;
+        if (section.header === selectedHeader) {
+          opt.selected = true;
+        }
+        sectionSelect.appendChild(opt);
+      }
+    }
+
+    async function loadDomaindocs(options = {}) {
+      setDomaindocsStatus('Loading DomainDocs...');
+      const result = await callAction('domain_knowledge', 'list', {});
+      const docs = Array.isArray(result.domaindocs) ? result.domaindocs : [];
+      docsCache = docs;
+
+      if (docs.length === 0) {
+        currentDocLabel = '';
+        currentSectionHeader = '';
+        renderDocOptions([], '');
+        renderSectionOptions([], '');
+        sectionContentInput.value = '';
+        docMetaEl.textContent = 'No DomainDocs yet. Create one above.';
+        setDomaindocsStatus('No DomainDocs found.');
+        return;
+      }
+
+      const requestedLabel = options.selectedLabel || currentDocLabel;
+      const selected = docs.find((d) => d.label === requestedLabel) || docs[0];
+      currentDocLabel = selected.label;
+      renderDocOptions(docs, currentDocLabel);
+      docMetaEl.textContent = (selected.enabled ? 'Enabled' : 'Disabled') + ' | ' + (selected.description || '');
+      await loadSections(currentDocLabel, options.selectedSection);
+      setDomaindocsStatus('Loaded ' + docs.length + ' DomainDoc(s).');
+    }
+
+    async function loadSections(label, selectedSection) {
+      if (!label) {
+        currentSectionHeader = '';
+        renderSectionOptions([], '');
+        sectionContentInput.value = '';
+        return;
+      }
+      setDomaindocsStatus('Loading sections for ' + label + '...');
+      const result = await callAction('domain_knowledge', 'list_sections', { label });
+      const sections = Array.isArray(result.sections) ? result.sections : [];
+      if (sections.length === 0) {
+        currentSectionHeader = '';
+        renderSectionOptions([], '');
+        sectionContentInput.value = '';
+        setDomaindocsStatus('No sections found. Create one.');
+        return;
+      }
+      const picked = sections.find((s) => s.header === selectedSection) || sections[0];
+      currentSectionHeader = picked.header;
+      renderSectionOptions(sections, currentSectionHeader);
+      await loadSectionContent();
+    }
+
+    async function loadSectionContent() {
+      if (!currentDocLabel || !currentSectionHeader) {
+        sectionContentInput.value = '';
+        return;
+      }
+      const result = await callAction('domain_knowledge', 'get_section', {
+        label: currentDocLabel,
+        section: currentSectionHeader,
+      });
+      sectionContentInput.value = result.content || '';
+      const collapsedState = result.collapsed ? 'collapsed' : 'expanded';
+      setDomaindocsStatus('Editing section "' + currentSectionHeader + '" (' + collapsedState + ').');
+    }
+
+    async function createDomaindoc() {
+      const label = newDocLabelInput.value.trim();
+      const description = newDocDescInput.value.trim();
+      if (!label || !description) {
+        throw new Error('Both label and description are required.');
+      }
+      await callAction('domain_knowledge', 'create', { label, description });
+      newDocLabelInput.value = '';
+      newDocDescInput.value = '';
+      await loadDomaindocs({ selectedLabel: label });
+      setDomaindocsStatus('Created DomainDoc "' + label + '".');
+    }
+
+    async function setDomaindocEnabled(enabled) {
+      if (!currentDocLabel) {
+        throw new Error('Select a DomainDoc first.');
+      }
+      const action = enabled ? 'enable' : 'disable';
+      await callAction('domain_knowledge', action, { label: currentDocLabel });
+      await loadDomaindocs({ selectedLabel: currentDocLabel, selectedSection: currentSectionHeader });
+      setDomaindocsStatus((enabled ? 'Enabled ' : 'Disabled ') + '"' + currentDocLabel + '".');
+    }
+
+    async function createSection() {
+      if (!currentDocLabel) {
+        throw new Error('Select a DomainDoc first.');
+      }
+      const section = newSectionInput.value.trim();
+      if (!section) {
+        throw new Error('Section header is required.');
+      }
+      await callAction('domain_knowledge', 'create_section', {
+        label: currentDocLabel,
+        section,
+        content: '',
+      });
+      newSectionInput.value = '';
+      await loadSections(currentDocLabel, section);
+      setDomaindocsStatus('Created section "' + section + '".');
+    }
+
+    async function setSectionCollapsed(collapsed) {
+      if (!currentDocLabel || !currentSectionHeader) {
+        throw new Error('Select a section first.');
+      }
+      const action = collapsed ? 'collapse_section' : 'expand_section';
+      await callAction('domain_knowledge', action, {
+        label: currentDocLabel,
+        section: currentSectionHeader,
+      });
+      await loadSectionContent();
+      setDomaindocsStatus((collapsed ? 'Collapsed ' : 'Expanded ') + '"' + currentSectionHeader + '".');
+    }
+
+    async function saveSection() {
+      if (!currentDocLabel || !currentSectionHeader) {
+        throw new Error('Select a section first.');
+      }
+      await callAction('domain_knowledge', 'update_section', {
+        label: currentDocLabel,
+        section: currentSectionHeader,
+        content: sectionContentInput.value,
+      });
+      setDomaindocsStatus('Saved "' + currentSectionHeader + '".');
+    }
+
     saveKeyBtn.addEventListener('click', async () => {
       const key = apiKeyInput.value.trim();
       if (!key) {
@@ -1085,6 +1338,7 @@ def webapp_index() -> str:
       await bootstrapChatWithCurrentKey(true);
       await loadFiles(pathInput.value.trim());
       await loadArtifacts();
+      await loadDomaindocs();
     });
 
     chatTab.addEventListener('click', () => setTab('chat'));
@@ -1092,6 +1346,10 @@ def webapp_index() -> str:
       setTab('files');
       loadFiles(pathInput.value.trim());
       loadArtifacts();
+    });
+    domaindocsTab.addEventListener('click', () => {
+      setTab('domaindocs');
+      loadDomaindocs().catch((err) => setDomaindocsStatus(err.message || String(err), true));
     });
 
     sendBtn.addEventListener('click', sendChatMessage);
@@ -1147,10 +1405,52 @@ def webapp_index() -> str:
       }
     });
 
+    reloadDocsBtn.addEventListener('click', () => {
+      loadDomaindocs().catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    docSelect.addEventListener('change', () => {
+      currentDocLabel = docSelect.value || '';
+      if (!currentDocLabel) {
+        renderSectionOptions([], '');
+        sectionContentInput.value = '';
+        return;
+      }
+      loadDomaindocs({ selectedLabel: currentDocLabel }).catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    sectionSelect.addEventListener('change', () => {
+      currentSectionHeader = sectionSelect.value || '';
+      loadSectionContent().catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    reloadSectionsBtn.addEventListener('click', () => {
+      loadSections(currentDocLabel, currentSectionHeader).catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    createDocBtn.addEventListener('click', () => {
+      createDomaindoc().catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    enableDocBtn.addEventListener('click', () => {
+      setDomaindocEnabled(true).catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    disableDocBtn.addEventListener('click', () => {
+      setDomaindocEnabled(false).catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    createSectionBtn.addEventListener('click', () => {
+      createSection().catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    expandSectionBtn.addEventListener('click', () => {
+      setSectionCollapsed(false).catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    collapseSectionBtn.addEventListener('click', () => {
+      setSectionCollapsed(true).catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+    saveSectionBtn.addEventListener('click', () => {
+      saveSection().catch((err) => setDomaindocsStatus(err.message || String(err), true));
+    });
+
     if (savedKey) {
       bootstrapChatWithCurrentKey();
       loadFiles('');
       loadArtifacts();
+      loadDomaindocs().catch((err) => setDomaindocsStatus(err.message || String(err), true));
     } else {
       appendBubble('assistant', 'Connected to local webapp. Paste API key, save it, then send a message or run /help.');
     }
@@ -1162,6 +1462,7 @@ def webapp_index() -> str:
         bootstrapChatWithCurrentKey();
         loadFiles('');
         loadArtifacts();
+        loadDomaindocs().catch((err) => setDomaindocsStatus(err.message || String(err), true));
       }
     }, 350);
   </script>
