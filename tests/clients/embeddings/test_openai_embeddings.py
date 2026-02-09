@@ -5,9 +5,16 @@ Tests OpenAIEmbeddingModel with real OpenAI API calls.
 Following MIRA testing philosophy: no mocks, test real API behavior.
 """
 import pytest
+import os
 import numpy as np
 from clients.embeddings.openai_embeddings import OpenAIEmbeddingModel
 from clients.vault_client import get_api_key
+
+if not (os.getenv("VAULT_ROLE_ID") and os.getenv("VAULT_SECRET_ID")):
+    pytest.skip(
+        "OpenAI embedding integration tests require Vault AppRole environment",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture(scope="module")

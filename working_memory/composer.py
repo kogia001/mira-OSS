@@ -202,8 +202,10 @@ class SystemPromptComposer:
         # Build formatted notification center
         # Opening delimiter is provided by the assistant message in orchestrator
         lines = [
+            "NOTIFICATION CENTER",
             "Runtime state. Authoritative for current context.",
             "Provides: temporal orientation, conversation structure, pending tasks, relevant memories.",
+            "Keep this front-of-mind while generating the reply.",
             "",
         ]
 

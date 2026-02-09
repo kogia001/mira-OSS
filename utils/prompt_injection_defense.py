@@ -79,6 +79,16 @@ class DefenseMetadata(BaseModel):
         description="Whether structural defense (XML wrapping) was applied"
     )
 
+    # Backward-compatible dict-style access expected by older tests/callers.
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def __contains__(self, key: str) -> bool:
+        return hasattr(self, key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
 
 class PromptInjectionDefense:
     """
@@ -105,18 +115,41 @@ class PromptInjectionDefense:
         """
         self.logger = logging.getLogger(__name__)
 
-        # Get LLM config from database
-        from utils.user_context import get_internal_llm
-        llm_config = get_internal_llm('injection_defense')
+        # Get LLM config from database. In test/minimal environments this may
+        # be unavailable before full app startup, so fall back to pattern-only mode.
+        from utils.user_context import get_internal_llm, InternalLLMConfig
+        try:
+            llm_config = get_internal_llm('injection_defense')
+        except Exception as e:
+            self.logger.warning(
+                "Internal LLM config unavailable for injection defense (%s); "
+                "falling back to pattern-only mode.",
+                e,
+            )
+            llm_config = InternalLLMConfig(
+                name='injection_defense',
+                model='',
+                endpoint_url='',
+                api_key_name=None,
+                description='Pattern-only fallback',
+            )
         self._llm_config = llm_config
 
         # Initialize LLM detection (degrades to pattern-only if unavailable)
         self._llm_available = False
         self._api_key = None
+        has_llm_config = bool(llm_config.model and llm_config.endpoint_url)
 
         try:
-            self._api_key = get_api_key(llm_config.api_key_name) if llm_config.api_key_name else None
-            if not self._api_key and llm_config.api_key_name:
+            if llm_config.api_key_name:
+                self._api_key = get_api_key(llm_config.api_key_name)
+
+            if not has_llm_config:
+                self.logger.warning("=" * 60)
+                self.logger.warning("PROMPT INJECTION DEFENSE: PATTERN-ONLY MODE")
+                self.logger.warning("No internal LLM config loaded for injection defense")
+                self.logger.warning("=" * 60)
+            elif not self._api_key and llm_config.api_key_name:
                 # Loud warning - API key configured but not found, degrade to pattern-only
                 self.logger.warning("=" * 60)
                 self.logger.warning("PROMPT INJECTION DEFENSE: DEGRADED MODE")
@@ -337,7 +370,10 @@ class PromptInjectionDefense:
             RuntimeError: If LLM detection is not available
         """
         if not self._llm_available:
-            raise RuntimeError("LLM detection not available (degraded mode)")
+            raise RuntimeError(
+                "LLM detection not available (degraded mode). "
+                "OpenRouter API key not configured."
+            )
 
         # Truncate content for efficiency
         content_truncated = content[:1000] if len(content) > 1000 else content

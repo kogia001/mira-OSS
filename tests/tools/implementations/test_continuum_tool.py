@@ -8,7 +8,9 @@ Following MIRA's real testing philosophy:
 - Cover all edge cases identified by contract analysis
 """
 import pytest
+import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 from tools.implementations.continuum_tool import ContinuumSearchTool
@@ -20,6 +22,12 @@ from cns.services.segment_helpers import (
 )
 from utils.timezone_utils import utc_now, format_utc_iso
 from utils.user_context import set_current_user_id
+
+if not (os.getenv("VAULT_ROLE_ID") and os.getenv("VAULT_SECRET_ID")):
+    pytest.skip(
+        "Continuum tool integration tests require Vault AppRole environment",
+        allow_module_level=True,
+    )
 
 
 class TestContinuumSearchToolContract:
@@ -1311,7 +1319,7 @@ class TestArchitecturalConstraints:
         """CONTRACT A7: No print statements, only logging."""
         import ast
 
-        file_path = "/Users/taylut/Programming/GitHub/botwithmemory/tools/implementations/continuum_tool.py"
+        file_path = Path(__file__).resolve().parents[3] / "tools/implementations/continuum_tool.py"
         with open(file_path, 'r') as f:
             tree = ast.parse(f.read())
 

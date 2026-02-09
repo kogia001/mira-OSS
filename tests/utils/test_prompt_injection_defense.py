@@ -11,6 +11,17 @@ from utils.prompt_injection_defense import PromptInjectionDefense, TrustLevel
 from clients.vault_client import get_api_key
 
 
+def _has_openrouter_key() -> bool:
+    """Best-effort key check that doesn't fail test collection."""
+    try:
+        return get_api_key("openrouter_key") is not None
+    except Exception:
+        return False
+
+
+HAS_OPENROUTER_KEY = _has_openrouter_key()
+
+
 class TestPromptInjectionDefense:
     """Test suite for PromptInjectionDefense service."""
 
@@ -30,7 +41,7 @@ class TestPromptInjectionDefense:
     @pytest.fixture
     def has_openrouter_key(self):
         """Check if OpenRouter API key is available."""
-        return get_api_key("openrouter_key") is not None
+        return HAS_OPENROUTER_KEY
 
     # Pattern Detection Tests
 
@@ -205,7 +216,7 @@ class TestPromptInjectionDefense:
         assert "OpenRouter API key not configured" in str(exc_info.value)
 
     @pytest.mark.skipif(
-        get_api_key("openrouter_key") is None,
+        not HAS_OPENROUTER_KEY,
         reason="OpenRouter API key not configured"
     )
     def test_llm_detection_real_injection(self, defense, has_openrouter_key):
@@ -228,7 +239,7 @@ class TestPromptInjectionDefense:
         print(f"LLM detection result: {result}")
 
     @pytest.mark.skipif(
-        get_api_key("openrouter_key") is None,
+        not HAS_OPENROUTER_KEY,
         reason="OpenRouter API key not configured"
     )
     def test_llm_detection_real_benign(self, defense, has_openrouter_key):
@@ -248,7 +259,7 @@ class TestPromptInjectionDefense:
         print(f"LLM detection result for benign: {result}")
 
     @pytest.mark.skipif(
-        get_api_key("openrouter_key") is None,
+        not HAS_OPENROUTER_KEY,
         reason="OpenRouter API key not configured"
     )
     def test_llm_detection_edge_case(self, defense, has_openrouter_key):
@@ -280,7 +291,7 @@ class TestPromptInjectionDefense:
         assert "<untrusted_content" in content
 
     @pytest.mark.skipif(
-        get_api_key("openrouter_key") is None,
+        not HAS_OPENROUTER_KEY,
         reason="OpenRouter API key not configured"
     )
     def test_full_sanitization_with_llm(self, defense, has_openrouter_key):

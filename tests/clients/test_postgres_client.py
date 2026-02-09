@@ -16,10 +16,17 @@ Does NOT test basic PostgreSQL operations - those are PostgreSQL's responsibilit
 """
 
 import pytest
+import os
 import uuid
 from datetime import datetime
 from utils.timezone_utils import utc_now
 from clients.postgres_client import PostgresClient
+
+if not (os.getenv("VAULT_ROLE_ID") and os.getenv("VAULT_SECRET_ID")):
+    pytest.skip(
+        "Postgres integration tests require Vault AppRole environment",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture
@@ -154,11 +161,9 @@ class TestPostgresClientRLSContextManagement:
         """Verify RLS isolates data between different user contexts."""
         user1_id = authenticated_user["user_id"]
 
-        # Create second user
-        # Removed for OSS: from auth.database import AuthDatabase
-        auth_db = # Removed for OSS: AuthDatabase()
-        user2_email = f"test_user_2_{uuid.uuid4()}@example.com"
-        user2_id = auth_db.create_user(user2_email, "password123", None, None)
+        # OSS mode: use shared test fixture helper for second user.
+        from tests.fixtures.core import ensure_second_test_user_exists
+        user2_id = ensure_second_test_user_exists()["id"]
 
         try:
             # Client for user 1
@@ -207,7 +212,6 @@ class TestPostgresClientRLSContextManagement:
         finally:
             # Cleanup
             client1.execute_query("DROP TABLE IF EXISTS test_rls_isolation CASCADE")
-            auth_db.delete_user(user2_id)
 
 
 class TestPostgresClientUUIDConversion:

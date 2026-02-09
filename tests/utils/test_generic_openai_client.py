@@ -6,6 +6,7 @@ Following MIRA testing philosophy: no mocks, test real API behavior.
 """
 import pytest
 import json
+import requests
 from utils.generic_openai_client import GenericOpenAIClient, GenericOpenAIResponse
 
 
@@ -18,6 +19,11 @@ OLLAMA_API_KEY = "ollama"  # Ollama doesn't require real key but expects Bearer 
 @pytest.fixture(scope="module")
 def ollama_client():
     """Shared Ollama client for tests."""
+    try:
+        requests.get("http://localhost:11434/api/tags", timeout=1)
+    except Exception as exc:
+        pytest.skip(f"Ollama endpoint unavailable: {exc}")
+
     return GenericOpenAIClient(
         endpoint=OLLAMA_ENDPOINT,
         api_key=OLLAMA_API_KEY,

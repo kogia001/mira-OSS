@@ -6,9 +6,11 @@ replacing in-memory locks that only work within a single process.
 """
 
 import logging
+import time
 import uuid
 from typing import Optional
 from contextlib import contextmanager
+from threading import Lock
 
 from clients.valkey_client import get_valkey
 
@@ -33,7 +35,18 @@ class DistributedLock:
         """
         self.lock_prefix = lock_prefix
         self.default_ttl = default_ttl
-        self.valkey = get_valkey()
+        self._local_guard = Lock()
+        self._local_locks: dict[str, tuple[str, float]] = {}
+        try:
+            self.valkey = get_valkey()
+            self._degraded_mode = False
+        except Exception as e:
+            logger.warning(
+                "DistributedLock running in local degraded mode (Valkey unavailable): %s",
+                e,
+            )
+            self.valkey = None
+            self._degraded_mode = True
     
     def acquire(self, resource_id: str, ttl: Optional[int] = None, lock_value: Optional[str] = None) -> bool:
         """
@@ -56,6 +69,16 @@ class DistributedLock:
         key = f"{self.lock_prefix}{resource_id}"
         ttl = ttl or self.default_ttl
         lock_value = lock_value or str(uuid.uuid4())
+
+        if self._degraded_mode:
+            now = time.monotonic()
+            with self._local_guard:
+                current = self._local_locks.get(key)
+                if current and current[1] > now:
+                    return False
+                self._local_locks[key] = (lock_value, now + ttl)
+            logger.debug(f"Acquired local lock for {resource_id} with TTL {ttl}s")
+            return True
 
         # SET NX (set if not exists) with EX (expiration)
         # This is atomic - either we get the lock or we don't
@@ -87,6 +110,16 @@ class DistributedLock:
             Exception: If Valkey is unavailable (infrastructure failure)
         """
         key = f"{self.lock_prefix}{resource_id}"
+        if self._degraded_mode:
+            now = time.monotonic()
+            with self._local_guard:
+                current = self._local_locks.get(key)
+                if not current:
+                    return None
+                if current[1] <= now:
+                    self._local_locks.pop(key, None)
+                    return None
+                return current[0]
         value = self.valkey.get(key)
         return value
     
@@ -119,6 +152,9 @@ class DistributedLock:
             Exception: If Valkey is unavailable (infrastructure failure)
         """
         key = f"{self.lock_prefix}{resource_id}"
+        if self._degraded_mode:
+            with self._local_guard:
+                return self._local_locks.pop(key, None) is not None
 
         deleted = self.valkey.delete(key)
 
@@ -143,6 +179,16 @@ class DistributedLock:
             Exception: If Valkey is unavailable (infrastructure failure)
         """
         key = f"{self.lock_prefix}{resource_id}"
+        if self._degraded_mode:
+            now = time.monotonic()
+            with self._local_guard:
+                current = self._local_locks.get(key)
+                if not current:
+                    return False
+                if current[1] <= now:
+                    self._local_locks.pop(key, None)
+                    return False
+                return True
         return self.valkey.exists(key)
     
     def get_ttl(self, resource_id: str) -> int:
@@ -159,6 +205,17 @@ class DistributedLock:
             Exception: If Valkey is unavailable (infrastructure failure)
         """
         key = f"{self.lock_prefix}{resource_id}"
+        if self._degraded_mode:
+            now = time.monotonic()
+            with self._local_guard:
+                current = self._local_locks.get(key)
+                if not current:
+                    return -2
+                remaining = int(current[1] - now)
+                if remaining <= 0:
+                    self._local_locks.pop(key, None)
+                    return -2
+                return remaining
         return self.valkey.ttl(key)
     
     @contextmanager

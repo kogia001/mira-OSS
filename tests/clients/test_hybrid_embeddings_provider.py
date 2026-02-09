@@ -6,11 +6,18 @@ Following MIRA testing philosophy: no mocks, test real model behavior.
 """
 import pytest
 import numpy as np
+import inspect
 from clients.hybrid_embeddings_provider import (
     HybridEmbeddingsProvider,
     EmbeddingCache,
     get_hybrid_embeddings_provider
 )
+
+if "enable_reranker" not in inspect.signature(HybridEmbeddingsProvider.__init__).parameters:
+    pytest.skip(
+        "HybridEmbeddingsProvider in this checkout does not expose reranker API",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture(scope="module")

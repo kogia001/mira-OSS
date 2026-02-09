@@ -14,6 +14,7 @@ Run with: pytest tests/tools/test_getcontext_tool.py -v -s
 """
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Dict, Any, List, Optional
@@ -31,6 +32,14 @@ from utils.timezone_utils import utc_now
 
 
 logger = logging.getLogger(__name__)
+
+_HAS_VAULT_INTEGRATION_ENV = bool(
+    os.getenv("VAULT_ROLE_ID") and os.getenv("VAULT_SECRET_ID")
+)
+requires_integration = pytest.mark.skipif(
+    not _HAS_VAULT_INTEGRATION_ENV,
+    reason="GetContext integration tests require Vault AppRole environment",
+)
 
 
 # ==================== FIXTURES ====================
@@ -246,6 +255,7 @@ class TestContextSearchAgent:
         assert agent.scratchpad[0]['metadata']['url'] == "https://example.com"
 
     @pytest.mark.integration
+    @requires_integration
     def test_plan_search_real_llm(self, mock_tool_repo, config):
         """Test plan_search with real LLM call."""
         agent = ContextSearchAgent('standard', mock_tool_repo, config)
@@ -270,6 +280,7 @@ class TestContextSearchAgent:
         logger.info(f"Plan generated: {json.dumps(plan, indent=2)}")
 
     @pytest.mark.integration
+    @requires_integration
     def test_determine_next_search_first_search(self, mock_tool_repo, config):
         """Test determine_next_search for initial search."""
         agent = ContextSearchAgent('standard', mock_tool_repo, config)
@@ -292,6 +303,7 @@ class TestContextSearchAgent:
         logger.info(f"First search: {json.dumps(next_search, indent=2)}")
 
     @pytest.mark.integration
+    @requires_integration
     def test_determine_next_search_with_findings(self, mock_tool_repo, config):
         """Test determine_next_search after gathering some findings."""
         agent = ContextSearchAgent('standard', mock_tool_repo, config)
@@ -332,6 +344,7 @@ class TestContextSearchAgent:
             logger.info("Agent determined search is complete")
 
     @pytest.mark.integration
+    @requires_integration
     def test_is_search_complete_standard_mode(self, mock_tool_repo, config):
         """Test completion check in standard mode with real LLM."""
         agent = ContextSearchAgent('standard', mock_tool_repo, config)
@@ -356,6 +369,7 @@ class TestContextSearchAgent:
         logger.info(f"Completion check: complete={is_complete}, reason={reason}")
 
     @pytest.mark.integration
+    @requires_integration
     def test_is_search_complete_deep_mode(self, mock_tool_repo, config):
         """Test completion check in deep mode requires more thorough search."""
         agent = ContextSearchAgent('deep', mock_tool_repo, config)
@@ -379,6 +393,7 @@ class TestContextSearchAgent:
         logger.info(f"Deep mode completion: complete={is_complete}, reason={reason}")
 
     @pytest.mark.integration
+    @requires_integration
     def test_summarize_findings_real_llm(self, mock_tool_repo, config):
         """Test final summarization with real LLM call."""
         agent = ContextSearchAgent('standard', mock_tool_repo, config)
@@ -581,9 +596,12 @@ class TestGetContextToolEventPublishing:
         # Wait briefly for event
         time.sleep(0.1)
 
-        # Verify event was published
-        assert len(events_received) == 1
-        event = events_received[0]
+        # Verify pending event was published (worker may also emit a failure quickly in envs
+        # without Vault/AppRole credentials).
+        task_events = [e for e in events_received if e.context.get('task_id') == task_id]
+        pending_events = [e for e in task_events if e.context.get('status') == 'pending']
+        assert len(pending_events) == 1
+        event = pending_events[0]
 
         assert event.target_trinket == 'GetContextTrinket'
         assert event.context['task_id'] == task_id
@@ -734,6 +752,7 @@ class TestGetContextToolIntegration:
     """Full integration tests with real LLM calls and background threads."""
 
     @pytest.mark.integration
+    @requires_integration
     @pytest.mark.slow
     def test_full_search_workflow_standard_mode(self, getcontext_tool, user_context, event_bus):
         """Test complete search workflow in standard mode with real LLM."""
@@ -798,6 +817,7 @@ class TestGetContextToolIntegration:
             pytest.fail(f"Search failed: {final_event.context['error']}")
 
     @pytest.mark.integration
+    @requires_integration
     @pytest.mark.slow
     def test_deep_search_mode(self, getcontext_tool, user_context, event_bus):
         """Test deep search mode gathers more comprehensive results."""
@@ -844,6 +864,7 @@ class TestGetContextToolIntegration:
             logger.info(f"Deep search completed in {summary.get('iterations')} iterations")
 
     @pytest.mark.integration
+    @requires_integration
     def test_concurrent_searches(self, getcontext_tool, user_context, event_bus):
         """Test multiple concurrent searches can run simultaneously."""
         events_received = []
@@ -886,6 +907,7 @@ class TestGetContextToolIntegration:
         assert len(completed_tasks) > 0
 
     @pytest.mark.integration
+    @requires_integration
     def test_search_with_limited_scope(self, getcontext_tool, user_context, event_bus):
         """Test search with limited scope (only conversation)."""
         events_received = []
@@ -920,6 +942,7 @@ class TestGetContextToolErrorHandling:
     """Test error handling and edge cases."""
 
     @pytest.mark.integration
+    @requires_integration
     def test_llm_api_failure_handling(self, mock_tool_repo, mock_working_memory, user_context):
         """Test handling of LLM API failures."""
         # Create tool with invalid API configuration

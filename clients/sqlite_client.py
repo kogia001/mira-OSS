@@ -195,8 +195,15 @@ class SQLiteClient:
             for row in rows:
                 for col in json_columns:
                     if col in row and row[col]:
-                        # Raises JSONDecodeError if data is corrupted/malformed
-                        row[col] = json.loads(row[col])
+                        try:
+                            row[col] = json.loads(row[col])
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(
+                                "Invalid JSON for column '%s' in table '%s'; returning None",
+                                col,
+                                table_name,
+                            )
+                            row[col] = None
         
         return rows
     

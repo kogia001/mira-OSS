@@ -222,6 +222,14 @@ class GenericOpenAIClient:
             "max_tokens": max_tokens,
             "temperature": temperature
         }
+        # Anthropic Messages API wants top-level system, not role=system
+        endpoint_str = (getattr(self, "endpoint", "") or "")
+        base_str = (getattr(self, "base_url", "") or getattr(self, "api_base", "") or "")
+        if system and ("anthropic.com" in endpoint_str or "anthropic.com" in base_str):
+            sys_msg = self._convert_system_prompt(system)
+            payload["system"] = sys_msg.get("content", "")
+            payload["messages"] = [m for m in payload["messages"] if m.get("role") != "system"]
+
 
         # Add tools if provided
         if tools:
@@ -239,7 +247,22 @@ class GenericOpenAIClient:
             logger.debug(f"Generic OpenAI client request to {self.endpoint} with model {self.model}")
             headers = {"Content-Type": "application/json"}
             if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+                # Auth header: Anthropic uses x-api-key; others use Bearer
+                endpoint_str = (getattr(self, "endpoint", "") or "")
+                base_str = (getattr(self, "base_url", "") or getattr(self, "api_base", "") or "")
+                if "anthropic.com" in endpoint_str or "anthropic.com" in base_str:
+                    headers.pop("Authorization", None)
+                    headers["x-api-key"] = self.api_key
+                    headers.setdefault("anthropic-version", "2023-06-01")
+                else:
+                    # Auth: Anthropic uses x-api-key (+ anthropic-version); others use Bearer
+                    if "anthropic.com" in (self.endpoint or ""):
+                        headers.pop("Authorization", None)
+                        headers["x-api-key"] = self.api_key
+                        headers.setdefault("anthropic-version", "2023-06-01")
+                    else:
+                        headers["Authorization"] = f"Bearer {self.api_key}"
+
             response = requests.post(
                 self.endpoint,
                 headers=headers,
@@ -318,6 +341,14 @@ class GenericOpenAIClient:
             "temperature": temperature,
             "stream": True
         }
+        # Anthropic Messages API wants top-level system, not role=system
+        endpoint_str = (getattr(self, "endpoint", "") or "")
+        base_str = (getattr(self, "base_url", "") or getattr(self, "api_base", "") or "")
+        if system and ("anthropic.com" in endpoint_str or "anthropic.com" in base_str):
+            sys_msg = self._convert_system_prompt(system)
+            payload["system"] = sys_msg.get("content", "")
+            payload["messages"] = [m for m in payload["messages"] if m.get("role") != "system"]
+
 
         if tools:
             openai_tools = self._convert_tools(tools)
@@ -329,7 +360,21 @@ class GenericOpenAIClient:
 
         headers = {"Content-Type": "application/json"}
         if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+            # Auth header: Anthropic uses x-api-key; others use Bearer
+            endpoint_str = (getattr(self, "endpoint", "") or "")
+            base_str = (getattr(self, "base_url", "") or getattr(self, "api_base", "") or "")
+            if "anthropic.com" in endpoint_str or "anthropic.com" in base_str:
+                headers.pop("Authorization", None)
+                headers["x-api-key"] = self.api_key
+                headers.setdefault("anthropic-version", "2023-06-01")
+            else:
+                # Auth: Anthropic uses x-api-key (+ anthropic-version); others use Bearer
+                if "anthropic.com" in (self.endpoint or ""):
+                    headers.pop("Authorization", None)
+                    headers["x-api-key"] = self.api_key
+                    headers.setdefault("anthropic-version", "2023-06-01")
+                else:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
 
         logger.debug(f"Starting streaming request to {self.endpoint}")
 
@@ -499,6 +544,39 @@ class GenericOpenAIClient:
         Raises:
             ValueError: If response structure is invalid
         """
+        # Handle native Anthropic Messages API response
+        if openai_response.get("type") == "message" and isinstance(openai_response.get("content"), list):
+            content_blocks = []
+            for b in openai_response.get("content", []):
+                btype = b.get("type")
+                if btype == "text":
+                    content_blocks.append(SimpleNamespace(type="text", text=b.get("text", "")))
+                elif btype == "tool_use":
+                    content_blocks.append(SimpleNamespace(
+                        type="tool_use",
+                        id=b.get("id"),
+                        name=b.get("name"),
+                        input=b.get("input", {})
+                    ))
+                elif btype == "thinking":
+                    content_blocks.append(SimpleNamespace(
+                        type="thinking",
+                        thinking=b.get("thinking") or b.get("text", ""),
+                        signature=b.get("signature")
+                    ))
+                else:
+                    content_blocks.append(SimpleNamespace(type="text", text=str(b)))
+            usage_raw = openai_response.get("usage", {}) or {}
+            usage = {
+                "input_tokens": usage_raw.get("input_tokens", 0),
+                "output_tokens": usage_raw.get("output_tokens", 0),
+                "cache_creation_input_tokens": usage_raw.get("cache_creation_input_tokens", 0),
+                "cache_read_input_tokens": usage_raw.get("cache_read_input_tokens", 0)
+            }
+            stop_reason = openai_response.get("stop_reason", "end_turn")
+            logger.debug(f"Generic OpenAI response (anthropic): {len(content_blocks)} blocks, {stop_reason}")
+            return GenericOpenAIResponse(content_blocks, stop_reason, usage)
+
         # Validate response structure
         if "choices" not in openai_response or not openai_response["choices"]:
             logger.error(f"Invalid OpenAI response: missing or empty choices - {openai_response}")

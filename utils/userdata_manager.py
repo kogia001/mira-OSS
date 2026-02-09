@@ -97,18 +97,20 @@ class UserDataManager:
     def _initialize_tool_schemas(self):
         """Initialize database schemas for all tools."""
         logger.info(f"Initializing tool schemas for user {self.user_id}")
-
-        # Initialize PagerTool schema
-        self._init_pager_schema()
-
-        # Initialize Domaindoc schema
-        self._init_domaindoc_schema()
+        # Use a temporary connection so __init__ doesn't eagerly create the
+        # manager's persistent lazy connection.
+        with sqlite3.connect(str(self.db_path), check_same_thread=False) as conn:
+            conn.row_factory = sqlite3.Row
+            self._init_pager_schema(conn)
+            self._init_domaindoc_schema(conn)
+            conn.commit()
 
         logger.info("Tool schemas initialized successfully")
-    
-    def _init_pager_schema(self):
+
+    def _init_pager_schema(self, conn: Optional[sqlite3.Connection] = None):
         """Initialize PagerTool database schema."""
-        cursor = self.connection.cursor()
+        connection = conn or self.connection
+        cursor = connection.cursor()
 
         # Pager devices table
         devices_sql = """
@@ -184,11 +186,12 @@ class UserDataManager:
         for index_sql in indexes_sql:
             cursor.execute(index_sql)
 
-        self.connection.commit()
+        connection.commit()
 
-    def _init_domaindoc_schema(self):
+    def _init_domaindoc_schema(self, conn: Optional[sqlite3.Connection] = None):
         """Initialize Domaindoc database schema for section-aware storage."""
-        cursor = self.connection.cursor()
+        connection = conn or self.connection
+        cursor = connection.cursor()
 
         # Domain metadata (replaces manifest.json)
         # Note: 'label' is the single identifier - used for both lookups and display
@@ -253,7 +256,7 @@ class UserDataManager:
         for index_sql in indexes_sql:
             cursor.execute(index_sql)
 
-        self.connection.commit()
+        connection.commit()
 
     def _encrypt_value(self, value: Any) -> str:
         """
@@ -510,4 +513,3 @@ class UserDataManagerCleanupHandler:
         except Exception as e:
             # Don't let cleanup failures break the collapse pipeline
             logger.warning(f"Failed to clean up UserDataManager for user {event.user_id}: {e}")
-

@@ -102,3 +102,20 @@ The script handles:
 I run a hosted copy of MIRA on [miraos.org](https://miraos.org/). It has a MacOS app that can be downloaded [here](https://miraos.org/assets/MIRA-for-Mac.dmg).
 
 The hosted version has a nice web interface, a native MacOS app, and you always get the latest improvements in real time. I push improvements to the hosted interface as soon as they're tested and complete. The account setup process involves entering your email address, clicking on the login link you receive, and you start chatting. Easy as that. **There is an unlimited free-access tier.**
+
+## Local web UI (OSS)
+
+The OSS server includes a local browser UI that supports direct chat with MIRA and sandbox file access:
+
+- UI: `GET /webapp`
+- Chat API: `POST /v0/api/chat` (auth required)
+- History API: `GET /v0/api/data?type=history` (auth required)
+- Actions API: `POST /v0/api/actions` (auth required)
+- List files API: `GET /v0/api/webapp/files` (auth required)
+- Download file API: `GET /v0/api/webapp/download` (auth required)
+- List Anthropic sandbox artifacts: `GET /v0/api/webapp/artifacts` (auth required)
+- Download Anthropic sandbox artifact: `GET /v0/api/webapp/artifacts/download?file_id=...` (auth required)
+
+The files tab auto-detects common output roots (`OUTPUT_DIR`, `/files/output`, `/files`, `/tmp`) and lets you switch roots from a selector.
+The chat tab loads recent history, supports paging older messages with `Load Older`, and supports CLI-style slash commands (`/help`, `/status`, `/tier`, `/domaindoc`, `/collapse`, `/clear`).
+It also exposes Anthropic `code_execution` sandbox artifacts captured during chat turns, downloadable by `file_id`.

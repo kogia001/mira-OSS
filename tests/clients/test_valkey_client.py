@@ -16,9 +16,26 @@ import asyncio
 import pytest
 import time
 import threading
+import socket
 from typing import List, Dict
 from utils.timezone_utils import utc_now
 from clients.valkey_client import ValkeyClient, get_valkey_client, create_ttl_persistence_setup
+
+
+def _valkey_available() -> bool:
+    """Whether a local Valkey endpoint is reachable from this test environment."""
+    try:
+        with socket.create_connection(("localhost", 6379), timeout=0.25):
+            return True
+    except OSError:
+        return False
+
+
+if not _valkey_available():
+    pytest.skip(
+        "Valkey integration tests require reachable valkey://localhost:6379",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture

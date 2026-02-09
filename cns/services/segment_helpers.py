@@ -134,10 +134,28 @@ def collapse_segment_sentinel(
         f"summary='{summary[:50]}...'"
     )
 
-    # Return new Message with clean summary - display formatting happens at display time
+    # Keep raw summary in metadata and store user-facing formatted content.
+    collapsed_metadata['raw_summary'] = summary
+    formatted_content = f"This is an extended summary of: {display_title}"
+    start_iso = collapsed_metadata.get('segment_start_time')
+    end_iso = collapsed_metadata.get('segment_end_time')
+    if start_iso and end_iso:
+        try:
+            start_dt = parse_utc_time_string(start_iso)
+            end_dt = parse_utc_time_string(end_iso)
+            timespan = (
+                f"{start_dt.strftime('%Y-%m-%d %H:%M')} "
+                f"to {end_dt.strftime('%Y-%m-%d %H:%M')}"
+            )
+            formatted_content += f"\nTimespan: {timespan}"
+        except Exception:
+            # Keep summary usable even if timestamp formatting fails.
+            pass
+    formatted_content += f"\n\n{summary}"
+
     return Message(
         id=sentinel.id,
-        content=summary,
+        content=formatted_content,
         role=sentinel.role,
         created_at=sentinel.created_at,
         metadata=collapsed_metadata
@@ -224,6 +242,12 @@ def format_segment_for_display(sentinel: Message) -> str:
 
     display_title = sentinel.metadata['display_title']
     summary = sentinel.content
+    if isinstance(summary, str) and summary.startswith("This is an extended summary of:"):
+        return summary
+
+    raw_summary = sentinel.metadata.get('raw_summary')
+    if raw_summary:
+        summary = raw_summary
     start_time_iso = sentinel.metadata['segment_start_time']
 
     # Convert ISO timestamp to datetime object
@@ -232,7 +256,7 @@ def format_segment_for_display(sentinel: Message) -> str:
     # Format as relative time (grouped timeframe using segment start)
     relative_time = format_relative_time(start_time)
 
-    return f"THIS IS AN EXTENDED SUMMARY OF: {display_title}\nTIMESPAN: {relative_time}\n\n{summary}"
+    return f"This is an extended summary of: {display_title}\nTimespan: {relative_time}\n\n{summary}"
 
 
 def create_collapse_marker() -> Message:

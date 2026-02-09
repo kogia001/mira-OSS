@@ -10,6 +10,7 @@ Following MIRA's real testing philosophy:
 import pytest
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from tools.implementations.contacts_tool import ContactsTool
 from utils.user_context import set_current_user_id
@@ -553,7 +554,7 @@ class TestArchitecturalConstraints:
         """CONTRACT A4: No print statements, only logging."""
         import ast
 
-        file_path = "/Users/taylut/Programming/GitHub/botwithmemory/tools/implementations/contacts_tool.py"
+        file_path = Path(__file__).resolve().parents[3] / "tools/implementations/contacts_tool.py"
         with open(file_path, 'r') as f:
             tree = ast.parse(f.read())
 

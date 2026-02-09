@@ -255,6 +255,10 @@ class ChatEndpoint(BaseHandler):
                     "tools_used": metadata.get("tools_used", []),
                     "referenced_memories": metadata.get("referenced_memories", []),
                     "surfaced_memories": metadata.get("surfaced_memories", []),
+                    "code_execution_file_ids": metadata.get("code_execution_file_ids", []),
+                    "verified_output_paths": metadata.get("verified_output_paths", []),
+                    "output_claim_detected": metadata.get("output_claim_detected", False),
+                    "output_claim_blocked": metadata.get("output_claim_blocked", False),
                     "processing_time_ms": processing_time_ms,
                 },
             }
@@ -309,4 +313,3 @@ async def chat_endpoint(request: ChatRequest, current_user=Depends(get_current_u
                 }
             }
         )
-

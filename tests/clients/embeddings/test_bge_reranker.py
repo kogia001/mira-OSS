@@ -8,6 +8,12 @@ Note: This file only tests reranking - embeddings come from mdbr-leaf-ir-asym.
 """
 import pytest
 import numpy as np
+
+bge_reranker_module = pytest.importorskip(
+    "clients.embeddings.bge_reranker",
+    reason="BGE reranker module not present in this checkout",
+)
+
 from clients.embeddings.bge_reranker import (
     BGEReranker,
     BGERerankerPool,

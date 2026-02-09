@@ -7,6 +7,8 @@ caching, and error handling with real Vault API.
 """
 import pytest
 import os
+import socket
+from urllib.parse import urlparse
 from hvac.exceptions import VaultError, InvalidPath, Unauthorized, Forbidden
 
 import clients.vault_client as vault_client
@@ -19,6 +21,45 @@ from clients.vault_client import (
     get_database_credentials,
     _ensure_vault_client,
 )
+
+
+def _has_vault_approle_env() -> bool:
+    return bool(
+        os.getenv("VAULT_ADDR")
+        and os.getenv("VAULT_ROLE_ID")
+        and os.getenv("VAULT_SECRET_ID")
+    )
+
+
+def _vault_reachable() -> bool:
+    vault_addr = os.getenv("VAULT_ADDR")
+    if not vault_addr:
+        return False
+
+    parsed = urlparse(vault_addr)
+    host = parsed.hostname
+    if not host:
+        return False
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+if not _has_vault_approle_env():
+    pytest.skip(
+        "Vault integration tests require VAULT_ADDR, VAULT_ROLE_ID, and VAULT_SECRET_ID",
+        allow_module_level=True,
+    )
+
+if not _vault_reachable():
+    pytest.skip(
+        "Vault integration tests require a reachable VAULT_ADDR endpoint",
+        allow_module_level=True,
+    )
 
 
 class TestVaultClientInitialization:

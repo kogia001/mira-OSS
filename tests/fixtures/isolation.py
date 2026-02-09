@@ -20,12 +20,17 @@ def reset_global_state():
     - Any other global state is reset
     """
     
-    # Clear distributed locks before test
-    valkey = get_valkey()
+    # Clear distributed locks before test when Valkey is available.
     try:
-        # Clear all user locks
-        for key in valkey.scan_iter(match="user_lock:*"):
-            valkey.delete(key)
+        valkey = get_valkey()
+    except Exception as e:
+        logger.warning(f"Valkey unavailable during test isolation setup: {e}")
+        valkey = None
+
+    try:
+        if valkey is not None:
+            for key in valkey.scan_iter(match="user_lock:*"):
+                valkey.delete(key)
     except Exception as e:
         logger.warning(f"Could not clear user locks: {e}")
     
@@ -33,9 +38,9 @@ def reset_global_state():
     
     # Clear after test
     try:
-        # Clear all user locks
-        for key in valkey.scan_iter(match="user_lock:*"):
-            valkey.delete(key)
+        if valkey is not None:
+            for key in valkey.scan_iter(match="user_lock:*"):
+                valkey.delete(key)
     except Exception as e:
         logger.warning(f"Could not clear user locks: {e}")
     
@@ -48,12 +53,17 @@ def clean_user_locks():
     
     Use this when you need explicit control over lock state.
     """
-    valkey = get_valkey()
+    try:
+        valkey = get_valkey()
+    except Exception as e:
+        logger.warning(f"Valkey unavailable during lock cleanup fixture: {e}")
+        valkey = None
     
     # Clear all user locks before test
     try:
-        for key in valkey.scan_iter(match="user_lock:*"):
-            valkey.delete(key)
+        if valkey is not None:
+            for key in valkey.scan_iter(match="user_lock:*"):
+                valkey.delete(key)
     except Exception as e:
         logger.warning(f"Could not clear user locks: {e}")
     
@@ -61,7 +71,8 @@ def clean_user_locks():
     
     # Clear all user locks after test
     try:
-        for key in valkey.scan_iter(match="user_lock:*"):
-            valkey.delete(key)
+        if valkey is not None:
+            for key in valkey.scan_iter(match="user_lock:*"):
+                valkey.delete(key)
     except Exception as e:
         logger.warning(f"Could not clear user locks: {e}")

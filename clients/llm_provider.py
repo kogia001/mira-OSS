@@ -1633,3 +1633,51 @@ class LLMProvider:
             for block in message.content
             if block.type == "tool_use"
         ]
+
+    def extract_code_execution_file_ids(self, message: anthropic.types.Message) -> List[str]:
+        """
+        Extract output file IDs emitted by Anthropic server-side code execution.
+
+        These file IDs can be downloaded through the Anthropic Files API.
+        """
+        if not message or not getattr(message, "content", None):
+            return []
+
+        file_ids: List[str] = []
+        seen: set[str] = set()
+
+        def add_file_id(value: Any) -> None:
+            if isinstance(value, str) and value and value not in seen:
+                seen.add(value)
+                file_ids.append(value)
+
+        def collect_from_obj(obj: Any) -> None:
+            if obj is None:
+                return
+
+            if hasattr(obj, "model_dump"):
+                collect_from_obj(obj.model_dump(mode="python"))
+                return
+
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    if key == "file_id":
+                        add_file_id(value)
+                    else:
+                        collect_from_obj(value)
+                return
+
+            if isinstance(obj, list):
+                for item in obj:
+                    collect_from_obj(item)
+
+        for block in message.content:
+            block_type = getattr(block, "type", None)
+            if not isinstance(block_type, str):
+                continue
+
+            # Include all code-execution result block variants.
+            if "code_execution" in block_type and "result" in block_type:
+                collect_from_obj(block)
+
+        return file_ids
