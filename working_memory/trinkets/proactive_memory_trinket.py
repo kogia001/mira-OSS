@@ -1,6 +1,7 @@
 """Proactive memory trinket for displaying relevant long-term memories."""
 import logging
 from typing import List, Dict, Any
+from xml.sax.saxutils import escape as xml_escape
 
 from utils.tag_parser import format_memory_id
 from .base import EventAwareTrinket
@@ -90,7 +91,7 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
             attrs.append(f'confidence="{int(confidence * 100)}"')
 
         parts = [f"<memory {' '.join(attrs)}>"]
-        parts.append(f"<text>{text}</text>")
+        parts.append(f"<text>{xml_escape(text)}</text>")
 
         # Created time
         if memory.get('created_at'):
@@ -163,7 +164,7 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
                 attrs.append(f'confidence="{int(confidence * 100)}"')
 
             parts.append(f"<linked_memory {' '.join(attrs)}>")
-            parts.append(f"<text>{linked.get('text', '')}</text>")
+            parts.append(f"<text>{xml_escape(linked.get('text', ''))}</text>")
 
             # Nested linked memories (recursive)
             nested_linked = linked.get('linked_memories', [])

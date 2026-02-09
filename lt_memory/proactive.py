@@ -188,7 +188,6 @@ class ProactiveService:
             "causes": 0.8,
             "motivated_by": 0.8,
             "instance_of": 0.7,
-            "shares_entity": 0.4,
         }
         MIN_CONFIDENCE = 0.6
 

@@ -200,11 +200,11 @@ class RefinementService:
 
         # Filter to hub candidates:
         # - High importance with frequent access, OR
-        # - Well-connected by semantic links (entity links don't count)
+        # - Well-connected (5+ inbound relationship links)
         hub_memories = [
             m for m in all_memories
             if (m.importance_score >= 0.3 and m.access_count >= 5) or
-               sum(1 for link in m.inbound_links if not link.get('type', '').startswith('shares_entity:')) >= 5
+               len(m.inbound_links) >= 5
         ]
 
         # Sort by importance descending, take top 50
@@ -226,8 +226,7 @@ class RefinementService:
                 memory_id=memory.id,
                 limit=max_cluster_size,
                 similarity_threshold=self.config.consolidation_similarity_threshold,
-                min_importance=0.001,  # Filter cold storage (0.0) memories
-                user_id=user_id
+                min_importance=0.001  # Filter cold storage (0.0) memories
             )
 
             if len(similar_memories) < (min_cluster_size - 1):

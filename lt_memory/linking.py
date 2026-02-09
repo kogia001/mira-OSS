@@ -328,7 +328,7 @@ Respond with JSON:
         Args:
             source_id: Source memory UUID
             target_id: Target memory UUID
-            link_type: Relationship type (conflicts, supports, supersedes, related)
+            link_type: Relationship type (conflicts, supersedes, causes, instance_of, invalidated_by, motivated_by)
             confidence: Link confidence (0.0-1.0)
             reasoning: Explanation of relationship
 

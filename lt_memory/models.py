@@ -100,7 +100,7 @@ class MemoryLink(BaseModel):
     """
     source_id: UUID
     target_id: UUID
-    link_type: str  # related, supports, conflicts, supersedes
+    link_type: str  # conflicts, supersedes, causes, instance_of, invalidated_by, motivated_by
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
     created_at: datetime

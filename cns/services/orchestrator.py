@@ -192,12 +192,11 @@ class ContinuumOrchestrator:
         # Generate 768d embedding for the fingerprint (query encoding)
         fingerprint_embedding = self.embeddings_provider.encode_realtime(fingerprint)
 
-        # Fresh retrieval with limit of 20
+        # Fresh retrieval using proactive config max_memories
         # Memory service raises exceptions on infrastructure failures - no hedging
         fresh_memories = self.memory_relevance_service.get_relevant_memories(
             fingerprint=fingerprint,
-            fingerprint_embedding=fingerprint_embedding,
-            limit=20
+            fingerprint_embedding=fingerprint_embedding
         )
 
         # Merge pinned + fresh, deduplicating by memory ID
@@ -227,73 +226,14 @@ class ContinuumOrchestrator:
         ))
 
         # Now compose system prompt with all context ready
-        from cns.core.events import ComposeSystemPromptEvent
-        # Reset and wait for synchronous event handler to populate
-        self._cached_content = None
-        self._non_cached_content = None
-        self._notification_center = None
-        self.event_bus.publish(ComposeSystemPromptEvent.create(
-            continuum_id=str(continuum.id),
-            base_prompt=system_prompt
-        ))
-        # Since events are synchronous, content should be ready
-        cached_content = self._cached_content or ""
-        non_cached_content = self._non_cached_content or ""
-        notification_center = self._notification_center or ""
-        
+        complete_messages = self._compose_and_build_messages(
+            continuum, system_prompt
+        )
+
         # Get available tools - only currently enabled tools
         # With invokeother_tool, the LLM can see all available tools in working memory
         # and load what it needs on demand
         available_tools = self.tool_repo.get_all_tool_definitions()
-        
-        # Build messages from continuum
-        messages = continuum.get_messages_for_api()
-
-        # Build structured system content with cache breakpoints
-        system_blocks = []
-
-        # Block 1: Cached content (base prompt + cached trinkets)
-        if cached_content:
-            system_blocks.append({
-                "type": "text",
-                "text": cached_content,
-                "cache_control": {"type": "ephemeral"}
-            })
-
-        # Block 2: Non-cached content (trinkets + temporal)
-        dynamic_parts = []
-        if non_cached_content:
-            dynamic_parts.append(non_cached_content)
-
-        # Add non-cached content block if any exists
-        if dynamic_parts:
-            system_blocks.append({
-                "type": "text",
-                "text": "\n\n".join(dynamic_parts)
-                # No cache_control - don't cache dynamic content
-            })
-
-        # Build complete message array with notification center injection
-        # Structure: SYSTEM -> CONVERSATION [cached] -> NOTIFICATION CENTER -> CURRENT USER
-        if notification_center and messages:
-            # Separate current user message from conversation history
-            # The current user message was just added to continuum, so it's the last message
-            current_user_msg = messages[-1]
-            history_messages = messages[:-1]
-
-            complete_messages = [
-                {"role": "system", "content": system_blocks},
-                *history_messages,
-                {"role": "assistant", "content": "═══════════════════════════ HUD ════════════════════════════\n" + notification_center},
-                current_user_msg,
-            ]
-            logger.debug(
-                f"Injected notification center: {len(history_messages)} history msgs + "
-                f"notification center ({len(notification_center)} chars)"
-            )
-        else:
-            # No notification center or no messages - use original structure
-            complete_messages = [{"role": "system", "content": system_blocks}] + messages
 
         # Initialize messages for LLM (may be modified by overflow remediation)
         messages_for_llm = complete_messages
@@ -377,6 +317,7 @@ class ContinuumOrchestrator:
                 # Apply remediation and continue loop
                 messages_for_llm = self._apply_overflow_remediation(
                     overflow_attempt, messages_for_llm, complete_messages, continuum, text_for_context,
+                    system_prompt=system_prompt,
                     estimated_tokens=estimated, event_type='proactive'
                 )
                 continue
@@ -500,6 +441,7 @@ class ContinuumOrchestrator:
                 # Apply remediation and retry
                 messages_for_llm = self._apply_overflow_remediation(
                     overflow_attempt, messages_for_llm, complete_messages, continuum, text_for_context,
+                    system_prompt=system_prompt,
                     estimated_tokens=e.estimated_tokens, event_type='reactive'
                 )
                 # Reset events for retry
@@ -652,6 +594,79 @@ class ContinuumOrchestrator:
 
         return continuum, final_response, metadata
     
+    def _compose_and_build_messages(
+        self,
+        continuum,
+        system_prompt: str
+    ) -> List[Dict]:
+        """
+        Trigger prompt composition and build the complete message array for the LLM.
+
+        Publishes ComposeSystemPromptEvent (synchronous), collects cached/non-cached/
+        notification content from trinkets, and assembles the final message list with
+        system blocks, conversation history, and notification center injection.
+
+        Args:
+            continuum: Current Continuum object
+            system_prompt: Base system prompt text
+
+        Returns:
+            Complete message list ready for the LLM
+        """
+        from cns.core.events import ComposeSystemPromptEvent
+        self._cached_content = None
+        self._non_cached_content = None
+        self._notification_center = None
+        self.event_bus.publish(ComposeSystemPromptEvent.create(
+            continuum_id=str(continuum.id),
+            base_prompt=system_prompt
+        ))
+        cached_content = self._cached_content or ""
+        non_cached_content = self._non_cached_content or ""
+        notification_center = self._notification_center or ""
+
+        messages = continuum.get_messages_for_api()
+
+        # Build structured system content with cache breakpoints
+        system_blocks = []
+
+        if cached_content:
+            system_blocks.append({
+                "type": "text",
+                "text": cached_content,
+                "cache_control": {"type": "ephemeral"}
+            })
+
+        dynamic_parts = []
+        if non_cached_content:
+            dynamic_parts.append(non_cached_content)
+
+        if dynamic_parts:
+            system_blocks.append({
+                "type": "text",
+                "text": "\n\n".join(dynamic_parts)
+            })
+
+        # Structure: SYSTEM -> CONVERSATION [cached] -> NOTIFICATION CENTER -> CURRENT USER
+        if notification_center and messages:
+            current_user_msg = messages[-1]
+            history_messages = messages[:-1]
+
+            complete_messages = [
+                {"role": "system", "content": system_blocks},
+                *history_messages,
+                {"role": "assistant", "content": "═══════════════════════════ HUD ════════════════════════════\n" + notification_center},
+                current_user_msg,
+            ]
+            logger.debug(
+                f"Injected notification center: {len(history_messages)} history msgs + "
+                f"notification center ({len(notification_center)} chars)"
+            )
+        else:
+            complete_messages = [{"role": "system", "content": system_blocks}] + messages
+
+        return complete_messages
+
     def _handle_system_prompt_composed(self, event):
         """Handle system prompt composed event."""
         from cns.core.events import SystemPromptComposedEvent
@@ -1079,13 +1094,14 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
         complete_messages: List[Dict],
         continuum,
         text_for_context: str,
+        system_prompt: str,
         estimated_tokens: int = 0,
         event_type: str = "proactive"
     ) -> List[Dict]:
         """
         Apply tiered overflow remediation strategy.
 
-        Tier 1: Force memory evacuation (preserves conversation, shrinks system prompt)
+        Tier 1: Force memory evacuation + recompose prompt (shrinks system prompt)
         Tier 2: Embedding-based topic drift pruning (fast, no LLM)
         Tier 3: Pure oldest-first fallback (maximum speed)
 
@@ -1095,6 +1111,7 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
             complete_messages: Original complete message list (for async judgment)
             continuum: Continuum object for ID
             text_for_context: User's text for evacuation context
+            system_prompt: Base system prompt for recomposition after evacuation
             estimated_tokens: Token estimate that triggered overflow (for logging)
             event_type: 'proactive' or 'reactive' (for logging)
 
@@ -1105,7 +1122,7 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
         messages_before = len(messages_for_llm)
 
         if attempt == 1 and self.memory_evacuator:
-            # Remediation 1: Force aggressive memory evacuation
+            # Remediation 1: Force aggressive memory evacuation + recompose prompt
             logger.info("Remediation 1: Forcing aggressive memory evacuation")
             previous_memories = self._get_previous_memories()
             if len(previous_memories) > 3:  # Only evacuate if meaningful reduction possible
@@ -1120,6 +1137,9 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
                     trinket._cached_memories = evacuated
                 logger.info(f"Memory evacuation: {len(previous_memories)} -> {len(evacuated)} memories")
 
+            # Recompose prompt so the reduced memory set takes effect this turn
+            recomposed = self._compose_and_build_messages(continuum, system_prompt)
+
             # Log the remediation attempt
             overflow_logger.log_overflow(
                 continuum_id=continuum.id,
@@ -1127,11 +1147,10 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
                 estimated_tokens=estimated_tokens,
                 remediation_tier=1,
                 messages_before=messages_before,
-                messages_after=messages_before,  # Messages unchanged, system prompt shrinks
+                messages_after=len(recomposed),
                 success=True
             )
-            # Return messages unchanged (system prompt will be rebuilt on next compose)
-            return messages_for_llm
+            return recomposed
 
         elif attempt == 2:
             # Remediation 2: Embedding-based topic drift pruning

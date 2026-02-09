@@ -1660,7 +1660,7 @@ class LTMemoryDB:
                 DELETE FROM extraction_batches
                 WHERE user_id = %(user_id)s
                   AND status IN ('failed', 'expired', 'cancelled')
-                  AND created_at < NOW() - INTERVAL '%(retention_hours)s hours'
+                  AND created_at < NOW() - INTERVAL '1 hour' * %(retention_hours)s
                 """
                 result = session.execute_update(query, {
                     'user_id': resolved_user_id,
@@ -1859,7 +1859,7 @@ class LTMemoryDB:
                 DELETE FROM post_processing_batches
                 WHERE user_id = %(user_id)s
                   AND status IN ('failed', 'expired', 'cancelled')
-                  AND created_at < NOW() - INTERVAL '%(retention_hours)s hours'
+                  AND created_at < NOW() - INTERVAL '1 hour' * %(retention_hours)s
                 """
                 result = session.execute_update(query, {
                     'user_id': resolved_user_id,
