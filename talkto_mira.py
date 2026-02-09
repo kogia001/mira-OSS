@@ -34,9 +34,54 @@ from clients.vault_client import get_api_key
 MIRA_API_URL = os.getenv("MIRA_API_URL", "http://localhost:1993")
 REQUEST_TIMEOUT = 120
 SERVER_STARTUP_TIMEOUT = 30
+UPDATE_CHECK_URL = "https://miraos.org/check_update"
+# Update check on startup (modified by deploy script based on user preference)
+UPDATE_CHECK_ENABLED = True
 
 _server_process = None
 console = Console()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Version & Update Check
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_current_version() -> str:
+    """Read current version from VERSION file."""
+    version_file = project_root / "VERSION"
+    try:
+        return version_file.read_text().strip()
+    except Exception:
+        return "unknown"
+
+
+def check_for_update() -> tuple[bool, str | None]:
+    """Check if a newer version is available.
+
+    Returns (update_available, latest_version).
+    Only sends the installed version to the server - no other information.
+    """
+    if not UPDATE_CHECK_ENABLED:
+        return False, None
+
+    current = get_current_version()
+    if current == "unknown":
+        return False, None
+
+    try:
+        response = requests.get(
+            UPDATE_CHECK_URL,
+            params={"version": current},
+            timeout=3
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("update_available"):
+                return True, data.get("latest_version")
+    except Exception:
+        pass  # Silent failure - update check is optional
+
+    return False, None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -535,6 +580,15 @@ def render_thinking() -> None:
     print("[ ^_^        ]", flush=True)
 
 
+def render_update_alert(latest_version: str) -> None:
+    """Render an update available alert."""
+    current = get_current_version()
+    console.print()
+    console.print(f"[yellow]Update available:[/yellow] {current} → {latest_version}")
+    console.print("[dim]Visit https://miraos.org to update[/dim]")
+    console.print()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Input
 # ─────────────────────────────────────────────────────────────────────────────
@@ -944,6 +998,11 @@ def main():
     if args.headless:
         one_shot(token, args.headless)
     else:
+        # Check for updates (only in interactive mode)
+        update_available, latest_version = check_for_update()
+        if update_available and latest_version:
+            render_update_alert(latest_version)
+
         chat_loop(token)
 
     if server_started:
