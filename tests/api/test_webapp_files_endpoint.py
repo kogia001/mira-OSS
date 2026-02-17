@@ -27,6 +27,14 @@ class TestWebappOutputFiles:
         assert response.status_code == 200
         assert "Load Older" in response.text
 
+    def test_webapp_page_sanitizes_think_and_tool_call_tags(self, test_client: TestClient):
+        response = test_client.get("/webapp")
+        assert response.status_code == 200
+        assert "replace(/<think" in response.text
+        assert "replace(/<\\\\/?think" in response.text
+        assert "replace(/<tool_call" in response.text
+        assert "replace(/<\\\\/?tool_call" in response.text
+
     def test_files_endpoint_requires_authentication(self, test_client: TestClient):
         response = test_client.get("/v0/api/webapp/files")
         assert response.status_code in [401, 403]

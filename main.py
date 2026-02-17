@@ -32,9 +32,13 @@ from utils.colored_logging import setup_colored_root_logging
 
 setup_colored_root_logging(log_level=logging.WARNING, fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# Set APScheduler loggers to DEBUG to suppress routine job execution logs
-logging.getLogger('apscheduler.executors.default').setLevel(logging.DEBUG)
-logging.getLogger('apscheduler.scheduler').setLevel(logging.DEBUG)
+# Optional diagnostics toggle for noisy operational logs.
+MIRA_DEBUG_LOGS = os.getenv("MIRA_DEBUG_LOGS", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+# Keep scheduler noise quiet by default, but allow opt-in debug tracing.
+apscheduler_level = logging.DEBUG if MIRA_DEBUG_LOGS else logging.WARNING
+logging.getLogger('apscheduler.executors.default').setLevel(apscheduler_level)
+logging.getLogger('apscheduler.scheduler').setLevel(apscheduler_level)
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +160,8 @@ def ensure_single_user(app: FastAPI) -> None:
             from clients.vault_client import _ensure_vault_client
             vault_client = _ensure_vault_client()
             secret_data = vault_client.client.secrets.kv.v2.read_secret_version(
-                path='mira/api_keys'
+                path='mira/api_keys',
+                raise_on_deleted_version=True,
             )
             api_key = secret_data['data']['data'].get('mira_api')
             app.state.api_key = api_key
@@ -299,26 +304,29 @@ async def lifespan(app: FastAPI):
 
     # Register Lattice username resolver for federation
     # This allows Lattice to resolve usernames to user_ids for inbound message delivery
-    try:
-        from lattice.username_resolver import set_username_resolver
-        from clients.postgres_client import PostgresClient
-        from typing import Optional
+    if not config.lattice.enabled:
+        logger.info("Lattice federation disabled via config")
+    else:
+        try:
+            from lattice.username_resolver import set_username_resolver
+            from clients.postgres_client import PostgresClient
+            from typing import Optional
 
-        def mira_resolve_username(username: str) -> Optional[str]:
-            """Resolve username to user_id for Lattice federation."""
-            db = PostgresClient("mira_service")
-            result = db.execute_single(
-                "SELECT user_id FROM global_usernames WHERE username = %(username)s AND active = true",
-                {"username": username.lower()}
-            )
-            return str(result["user_id"]) if result else None
+            def mira_resolve_username(username: str) -> Optional[str]:
+                """Resolve username to user_id for Lattice federation."""
+                db = PostgresClient("mira_service")
+                result = db.execute_single(
+                    "SELECT user_id FROM global_usernames WHERE username = %(username)s AND active = true",
+                    {"username": username.lower()}
+                )
+                return str(result["user_id"]) if result else None
 
-        set_username_resolver(mira_resolve_username)
-        logger.info("Lattice username resolver registered")
-    except ImportError:
-        logger.warning("Lattice package not available - federation disabled")
-    except Exception as e:
-        logger.warning(f"Failed to register Lattice username resolver: {e}")
+            set_username_resolver(mira_resolve_username)
+            logger.info("Lattice username resolver registered")
+        except ImportError:
+            logger.warning("Lattice federation enabled but lattice package is not installed")
+        except Exception as e:
+            logger.warning(f"Failed to register Lattice username resolver: {e}")
 
     logger.info("MIRA startup complete")
     

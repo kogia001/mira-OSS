@@ -545,7 +545,13 @@ def webapp_index() -> str:
     }
 
     function stripEmotionTag(text) {
-      return String(text || '').replace(/\\n?<mira:my_emotion>[\\s\\S]*?<\\/mira:my_emotion>/g, '').trim();
+      return String(text || '')
+        .replace(/<think(?:\\s[^>]*)?>[\\s\\S]*?<\\/think>/gi, '')
+        .replace(/<\\/?think(?:\\s[^>]*)?>/gi, '')
+        .replace(/<tool_call(?:\\s[^>]*)?>[\\s\\S]*?<\\/tool_call>/gi, '')
+        .replace(/<\\/?tool_call(?:\\s[^>]*)?>/gi, '')
+        .replace(/\\n?<mira:my_emotion>[\\s\\S]*?<\\/mira:my_emotion>/g, '')
+        .trim();
     }
 
     function contentToText(content) {

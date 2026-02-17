@@ -7,12 +7,14 @@ and clears all state on segment collapse.
 """
 import json
 import logging
+import os
 from typing import Dict, Any
 
 from working_memory.trinkets.base import EventAwareTrinket
 from utils.user_context import get_current_user_id
 
 logger = logging.getLogger(__name__)
+MIRA_DEBUG_LOGS = os.getenv("MIRA_DEBUG_LOGS", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class GetContextTrinket(EventAwareTrinket):
@@ -56,7 +58,10 @@ class GetContextTrinket(EventAwareTrinket):
         status = context.get('status', 'success')
 
         if not task_id:
-            logger.warning("Received update without task_id, ignoring")
+            if MIRA_DEBUG_LOGS:
+                logger.warning("Received update without task_id, ignoring")
+            else:
+                logger.debug("Received update without task_id, ignoring")
             return
 
         # Store result in state based on type
