@@ -106,6 +106,7 @@ class ContinuumOrchestrator:
         stream: bool = False,
         stream_callback=None,
         _tried_loading_all_tools: bool = False,
+        _internal_user_message: bool = False,
         unit_of_work=None,
         storage_content: Optional[Union[str, List[Dict[str, Any]]]] = None,
         segment_turn_number: int = 1,
@@ -121,6 +122,9 @@ class ContinuumOrchestrator:
             stream: Whether to stream response
             stream_callback: Callback for streaming chunks
             _tried_loading_all_tools: Internal flag to prevent infinite need_tool loops
+            _internal_user_message: Internal flag for synthetic orchestration prompts.
+                                  Internal user messages are used for inference only and
+                                  are not persisted to history.
             unit_of_work: Optional UnitOfWork for batching persistence operations
             storage_content: Content for persistence (optional). For images, this should
                            be the storage tier (512px WebP). If not provided, user_message
@@ -633,6 +637,15 @@ class ContinuumOrchestrator:
         )
         self._publish_events(response_events)
 
+        # Internal orchestration prompts are inference-only and should not appear in
+        # user-visible/history message streams.
+        if _internal_user_message:
+            continuum.apply_cache([
+                msg for msg in continuum.messages
+                if msg.id != user_msg_obj.id
+            ])
+            logger.debug("Removed internal synthetic user message from continuum cache")
+
         # Publish turn completed event for subscribers (Letta buffering, tool auto-unload, etc.)
         # Pass continuum object so handlers can extract whatever data they need
         # Calculate turn number from message count (each turn = user msg + assistant msg)
@@ -659,31 +672,35 @@ class ContinuumOrchestrator:
         if not unit_of_work:
             raise ValueError("Unit of Work is required for message persistence")
 
-        # Prepare user message for persistence
-        # Validate: if user_message contains images, storage_content MUST be provided
-        if isinstance(user_msg_obj.content, list):
-            has_image = any(item.get('type') == 'image' for item in user_msg_obj.content)
-            if has_image and storage_content is None:
-                raise ValueError(
-                    "storage_content is required when user_message contains images. "
-                    "Callers must provide the 512px WebP storage tier for image persistence."
-                )
+        if _internal_user_message:
+            # Internal synthetic prompts are never persisted as user turns.
+            unit_of_work.add_messages(assistant_msg_obj)
+        else:
+            # Prepare user message for persistence
+            # Validate: if user_message contains images, storage_content MUST be provided
+            if isinstance(user_msg_obj.content, list):
+                has_image = any(item.get('type') == 'image' for item in user_msg_obj.content)
+                if has_image and storage_content is None:
+                    raise ValueError(
+                        "storage_content is required when user_message contains images. "
+                        "Callers must provide the 512px WebP storage tier for image persistence."
+                    )
 
-        # Use storage_content if provided (e.g., 512px WebP for images), otherwise use original
-        persist_content = storage_content if storage_content is not None else user_msg_obj.content
+            # Use storage_content if provided (e.g., 512px WebP for images), otherwise use original
+            persist_content = storage_content if storage_content is not None else user_msg_obj.content
 
-        # Create message with appropriate content for persistence
-        from cns.core.message import Message
-        persist_user_msg = Message(
-            content=persist_content,
-            role=user_msg_obj.role,
-            id=user_msg_obj.id,
-            created_at=user_msg_obj.created_at,
-            metadata=user_msg_obj.metadata
-        )
+            # Create message with appropriate content for persistence
+            from cns.core.message import Message
+            persist_user_msg = Message(
+                content=persist_content,
+                role=user_msg_obj.role,
+                id=user_msg_obj.id,
+                created_at=user_msg_obj.created_at,
+                metadata=user_msg_obj.metadata
+            )
 
-        # Add messages to unit of work for batch persistence
-        unit_of_work.add_messages(persist_user_msg, assistant_msg_obj)
+            # Add messages to unit of work for batch persistence
+            unit_of_work.add_messages(persist_user_msg, assistant_msg_obj)
 
         # Mark metadata for update
         unit_of_work.mark_metadata_updated()
@@ -708,6 +725,7 @@ class ContinuumOrchestrator:
                 stream=stream,
                 stream_callback=stream_callback,
                 _tried_loading_all_tools=True,  # Prevent infinite loops
+                _internal_user_message=True,  # Keep synthetic prompt internal-only
                 unit_of_work=unit_of_work,
                 segment_turn_number=segment_turn_number
             )
