@@ -108,9 +108,10 @@ CREATE TABLE IF NOT EXISTS account_tiers (
 );
 
 INSERT INTO account_tiers (name, model, thinking_budget, description, display_order, provider, endpoint_url, api_key_name, show_locked, locked_message) VALUES
-    ('fast', 'google/gemini-3-flash-preview', 0, 'Gemini 3 Flash', 1, 'generic', 'https://openrouter.ai/api/v1/chat/completions', 'provider_key', FALSE, NULL),
-    ('balanced', 'claude-sonnet-4-20250514', 0, 'Sonnet 4', 2, 'anthropic', NULL, NULL, FALSE, NULL),
-    ('nuanced', 'claude-opus-4-5-20251101', 4096, 'Opus w/ Thinking', 3, 'anthropic', NULL, NULL, FALSE, NULL)
+    ('fast', 'llama-3.1-8b-instant', 0, 'Llama 3.1 8B Instant (Groq)', 1, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'provider_key_1', FALSE, NULL),
+    ('balanced', 'qwen/qwen3-32b', 0, 'Qwen3 32B (Groq)', 2, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'provider_key_1', FALSE, NULL),
+    ('oss', 'openai/gpt-oss-120b', 0, 'GPT OSS 120B (Groq)', 3, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'provider_key_1', FALSE, NULL),
+    ('nuanced', 'claude-opus-4-5-20251101', 4096, 'Opus w/ Thinking', 4, 'anthropic', NULL, NULL, FALSE, NULL)
 ON CONFLICT (name) DO NOTHING;
 
 -- Internal LLM configurations for system operations (not user-facing)
@@ -150,8 +151,8 @@ CREATE TABLE IF NOT EXISTS users (
 
     -- LLM tier preference
     llm_tier VARCHAR(20) DEFAULT 'balanced' REFERENCES account_tiers(name),
-    -- Maximum tier this user can access (hierarchical: fast < balanced < nuanced)
-    max_tier VARCHAR(20) NOT NULL DEFAULT 'balanced' REFERENCES account_tiers(name),
+    -- Maximum tier this user can access (hierarchical: fast < balanced < oss < nuanced)
+    max_tier VARCHAR(20) NOT NULL DEFAULT 'nuanced' REFERENCES account_tiers(name),
 
     -- Donation tracking (suppresses donation banner for 21 days when set)
     last_donated_at TIMESTAMP WITH TIME ZONE
@@ -159,6 +160,8 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- Grant SELECT on account_tiers to application user
 GRANT SELECT ON account_tiers TO mira_dbuser;
+-- Allow runtime provider/model rewire actions without full table update privileges
+GRANT UPDATE (provider, endpoint_url, api_key_name, model, thinking_budget) ON account_tiers TO mira_dbuser;
 
 COMMENT ON COLUMN users.cumulative_activity_days IS 'Total number of days user has sent at least one message (activity-based time metric)';
 COMMENT ON COLUMN users.last_activity_date IS 'Last date user sent a message (prevents double-counting same day)';

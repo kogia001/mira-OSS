@@ -1510,6 +1510,11 @@ Example output: "Backyard garden management: current plantings with locations an
 class ContinuumDomainHandler(BaseDomainHandler):
     """Handler for continuum-level configuration actions (LLM tier, segment collapse)."""
 
+    GROQ_CHAT_COMPLETIONS_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+    MODEL_ALIASES = {
+        "gpt-openai/gpt-oss-120b": "openai/gpt-oss-120b",
+    }
+
     ACTIONS = {
         "get_llm_tier": {
             "required": [],
@@ -1522,6 +1527,48 @@ class ContinuumDomainHandler(BaseDomainHandler):
             "types": {
                 "tier": str
             }
+        },
+        "get_tier_provider_status": {
+            "required": [],
+            "optional": [],
+            "types": {}
+        },
+        "set_provider_key": {
+            "required": ["selection_id", "api_key"],
+            "optional": [],
+            "types": {
+                "selection_id": int,
+                "api_key": str
+            }
+        },
+        "set_tier_provider_selection": {
+            "required": ["tier", "selection_id"],
+            "optional": [],
+            "types": {
+                "tier": str,
+                "selection_id": int
+            }
+        },
+        "set_tier_model": {
+            "required": ["tier", "model"],
+            "optional": [],
+            "types": {
+                "tier": str,
+                "model": str
+            }
+        },
+        "set_tier_thinking_budget": {
+            "required": ["tier", "thinking_budget"],
+            "optional": [],
+            "types": {
+                "tier": str,
+                "thinking_budget": int
+            }
+        },
+        "reload_tier_cache": {
+            "required": [],
+            "optional": [],
+            "types": {}
         },
         "collapse_segment": {
             "required": [],
@@ -1598,6 +1645,149 @@ class ContinuumDomainHandler(BaseDomainHandler):
                 "tier": tier,
                 "message": f"LLM tier set to {tier}"
             }
+
+        elif action == "get_tier_provider_status":
+            from clients.postgres_client import PostgresClient
+            from clients.vault_client import has_api_key
+
+            db = PostgresClient('mira_service')
+            rows = db.execute_query(
+                "SELECT name, provider, endpoint_url, api_key_name, model, thinking_budget "
+                "FROM account_tiers WHERE name IN (%s, %s, %s) ORDER BY display_order",
+                ("fast", "balanced", "oss")
+            )
+
+            tiers = []
+            for row in rows:
+                api_key_name = row.get("api_key_name")
+                tiers.append({
+                    "name": row["name"],
+                    "provider": row["provider"],
+                    "endpoint_url": row.get("endpoint_url"),
+                    "api_key_name": api_key_name,
+                    "model": row["model"],
+                    "thinking_budget": row["thinking_budget"],
+                    "has_api_key": has_api_key(api_key_name) if api_key_name else None
+                })
+
+            return {
+                "success": True,
+                "tiers": tiers
+            }
+
+        elif action == "set_provider_key":
+            from clients.vault_client import set_api_key
+
+            selection_id = data.get("selection_id")
+            api_key = (data.get("api_key") or "").strip()
+
+            if selection_id < 1:
+                raise ValidationError("selection_id must be >= 1")
+            if not api_key:
+                raise ValidationError("api_key must be non-empty")
+
+            key_name = f"provider_key_{selection_id}"
+            try:
+                set_api_key(key_name, api_key)
+            except Exception as e:
+                raise ValidationError(f"Vault write failed: {e.__class__.__name__}")
+
+            return {
+                "success": True,
+                "key_name": key_name
+            }
+
+        elif action == "set_tier_provider_selection":
+            from clients.postgres_client import PostgresClient
+            import utils.user_context as user_context
+
+            tier = (data.get("tier") or "").strip().lower()
+            selection_id = data.get("selection_id")
+
+            if tier not in {"fast", "balanced", "oss"}:
+                raise ValidationError("tier must be one of: fast, balanced, oss")
+            if selection_id < 1:
+                raise ValidationError("selection_id must be >= 1")
+
+            key_name = f"provider_key_{selection_id}"
+            db = PostgresClient('mira_service')
+            rows_updated = db.execute_update(
+                "UPDATE account_tiers SET provider=%s, endpoint_url=%s, api_key_name=%s WHERE name=%s",
+                ("generic", self.GROQ_CHAT_COMPLETIONS_ENDPOINT, key_name, tier)
+            )
+            if rows_updated != 1:
+                raise ValidationError(f"Failed to update tier provider selection for '{tier}'")
+
+            user_context._tiers_cache = None
+
+            return {
+                "success": True,
+                "tier": tier,
+                "endpoint_url": self.GROQ_CHAT_COMPLETIONS_ENDPOINT,
+                "api_key_name": key_name
+            }
+
+        elif action == "set_tier_model":
+            from clients.postgres_client import PostgresClient
+            import utils.user_context as user_context
+
+            tier = (data.get("tier") or "").strip().lower()
+            model = (data.get("model") or "").strip()
+            model = self.MODEL_ALIASES.get(model, model)
+
+            if tier not in {"fast", "balanced", "oss"}:
+                raise ValidationError("tier must be one of: fast, balanced, oss")
+            if not model:
+                raise ValidationError("model must be non-empty")
+
+            db = PostgresClient('mira_service')
+            rows_updated = db.execute_update(
+                "UPDATE account_tiers SET model=%s WHERE name=%s",
+                (model, tier)
+            )
+            if rows_updated != 1:
+                raise ValidationError(f"Failed to update model for tier '{tier}'")
+
+            user_context._tiers_cache = None
+
+            return {
+                "success": True,
+                "tier": tier,
+                "model": model
+            }
+
+        elif action == "set_tier_thinking_budget":
+            from clients.postgres_client import PostgresClient
+            import utils.user_context as user_context
+
+            tier = (data.get("tier") or "").strip().lower()
+            thinking_budget = data.get("thinking_budget")
+
+            if tier not in {"fast", "balanced", "oss"}:
+                raise ValidationError("tier must be one of: fast, balanced, oss")
+            if thinking_budget is None or thinking_budget < 0:
+                raise ValidationError("thinking_budget must be an integer >= 0")
+
+            db = PostgresClient('mira_service')
+            rows_updated = db.execute_update(
+                "UPDATE account_tiers SET thinking_budget=%s WHERE name=%s",
+                (thinking_budget, tier)
+            )
+            if rows_updated != 1:
+                raise ValidationError(f"Failed to update thinking budget for tier '{tier}'")
+
+            user_context._tiers_cache = None
+
+            return {
+                "success": True,
+                "tier": tier,
+                "thinking_budget": thinking_budget
+            }
+
+        elif action == "reload_tier_cache":
+            import utils.user_context as user_context
+            user_context._tiers_cache = None
+            return {"success": True}
 
         elif action == "collapse_segment":
             from cns.infrastructure.continuum_pool import get_continuum_pool

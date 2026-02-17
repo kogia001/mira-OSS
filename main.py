@@ -51,6 +51,30 @@ def ensure_single_user(app: FastAPI) -> None:
     session_manager = get_shared_session_manager()
 
     with session_manager.get_admin_session() as session:
+        # Keep baseline OSS tiers present even on existing databases.
+        session.execute_update("""
+            INSERT INTO account_tiers (
+                name, model, thinking_budget, description, display_order,
+                provider, endpoint_url, api_key_name, show_locked, locked_message
+            ) VALUES
+                ('fast', 'llama-3.1-8b-instant', 0, 'Llama 3.1 8B Instant (Groq)', 1, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'provider_key_1', FALSE, NULL),
+                ('balanced', 'qwen/qwen3-32b', 0, 'Qwen3 32B (Groq)', 2, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'provider_key_1', FALSE, NULL),
+                ('oss', 'openai/gpt-oss-120b', 0, 'GPT OSS 120B (Groq)', 3, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'provider_key_1', FALSE, NULL),
+                ('nuanced', 'claude-opus-4-5-20251101', 4096, 'Opus w/ Thinking', 4, 'anthropic', NULL, NULL, FALSE, NULL)
+            ON CONFLICT (name) DO NOTHING
+        """)
+        # Normalize legacy oss model alias if present from earlier builds.
+        session.execute_update("""
+            UPDATE account_tiers
+            SET model = 'openai/gpt-oss-120b'
+            WHERE name = 'oss' AND model = 'gpt-openai/gpt-oss-120b'
+        """)
+        # Keep runtime privileges aligned with provider action surface.
+        session.execute_update("""
+            GRANT UPDATE (provider, endpoint_url, api_key_name, model, thinking_budget)
+            ON account_tiers TO mira_dbuser
+        """)
+
         result = session.execute_single("SELECT COUNT(*) as count FROM users")
         user_count = result['count']
 
@@ -62,8 +86,8 @@ def ensure_single_user(app: FastAPI) -> None:
             default_email = "user@localhost"
 
             session.execute_update("""
-                INSERT INTO users (id, email, is_active, memory_manipulation_enabled)
-                VALUES (%(id)s, %(email)s, true, true)
+                INSERT INTO users (id, email, is_active, memory_manipulation_enabled, llm_tier, max_tier)
+                VALUES (%(id)s, %(email)s, true, true, 'balanced', 'nuanced')
             """, {'id': user_id, 'email': default_email})
 
             # Create the continuum (normally done during signup flow)
@@ -152,7 +176,13 @@ def ensure_single_user(app: FastAPI) -> None:
             print("MIRA OSS operates in single-user mode only.")
             sys.exit(1)
 
-        user = session.execute_single("SELECT id, email FROM users LIMIT 1")
+        user = session.execute_single("SELECT id, email, max_tier FROM users LIMIT 1")
+        if not user.get('max_tier') or user['max_tier'] == 'balanced':
+            session.execute_update(
+                "UPDATE users SET max_tier = 'nuanced' WHERE id = %(id)s",
+                {'id': user['id']}
+            )
+            logger.info(f"Promoted single-user max_tier to nuanced for user {user['id']}")
         app.state.single_user_id = str(user['id'])
         app.state.user_email = user['email']
 

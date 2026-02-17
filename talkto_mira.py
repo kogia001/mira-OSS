@@ -662,13 +662,28 @@ def chat_loop(token: str) -> None:
 
         # Slash commands
         if user_input.startswith('/'):
-            parts = user_input[1:].split(maxsplit=1)
+            raw_command = user_input[1:]
+            parts = raw_command.split(maxsplit=1)
             cmd = parts[0].lower() if parts else ""
-            arg = parts[1].lower() if len(parts) > 1 else None
+            raw_arg = parts[1] if len(parts) > 1 else ""
+            arg = raw_arg.lower()
 
             if cmd == "help":
                 console.print()
-                render_mira_message("/tier [name] - view or change model tier\n/domaindoc list|create|enable|disable\n/collapse - end current conversation segment\n/status\n/clear\nquit, exit, bye")
+                render_mira_message(
+                    "/tier [name] - view or change model tier\n"
+                    "/provider status\n"
+                    "/provider key set <selection_id> <api_key>\n"
+                    "/provider use <tier> <selection_id>\n"
+                    "/provider model set <tier> <model_id>\n"
+                    "/provider thinking set <tier> <budget>\n"
+                    "/provider reload\n"
+                    "/domaindoc list|create|enable|disable\n"
+                    "/collapse - end current conversation segment\n"
+                    "/status\n"
+                    "/clear\n"
+                    "quit, exit, bye"
+                )
                 console.print()
 
             elif cmd == "status":
@@ -784,6 +799,199 @@ def chat_loop(token: str) -> None:
                     render_mira_message("\n".join(tier_lines))
                     console.print()
 
+            elif cmd == "provider":
+                provider_parts = raw_command.split()
+                provider_usage = (
+                    "/provider status\n"
+                    "/provider key set <selection_id> <api_key>\n"
+                    "/provider use <tier> <selection_id>\n"
+                    "/provider model set <tier> <model_id>\n"
+                    "/provider thinking set <tier> <budget>\n"
+                    "/provider reload"
+                )
+
+                if len(provider_parts) == 2 and provider_parts[1].lower() == "status":
+                    resp = call_action(token, "continuum", "get_tier_provider_status", {})
+                    if resp.get("success"):
+                        status_data = resp.get("data", {})
+                        tiers = status_data.get("tiers", [])
+                        if not tiers:
+                            message = "No provider status rows found for tiers fast/balanced/oss."
+                        else:
+                            lines = ["Tier       Provider   Endpoint                         API Key Name       Key Present  Thinking  Model"]
+                            lines.append("----------------------------------------------------------------------------------------------------------------")
+                            for tier_info in tiers:
+                                has_key = tier_info.get("has_api_key")
+                                key_present = "yes" if has_key is True else "no" if has_key is False else "-"
+                                lines.append(
+                                    f"{tier_info.get('name', '-'):10} "
+                                    f"{tier_info.get('provider', '-'):10} "
+                                    f"{(tier_info.get('endpoint_url') or '-')[:32]:32} "
+                                    f"{(tier_info.get('api_key_name') or '-')[:18]:18} "
+                                    f"{key_present:11} "
+                                    f"{str(tier_info.get('thinking_budget', '-')):8} "
+                                    f"{tier_info.get('model', '-')}"
+                                )
+                            message = "\n".join(lines)
+                        console.print()
+                        render_mira_message(message)
+                        console.print()
+                    else:
+                        console.print()
+                        render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
+                        console.print()
+
+                elif (
+                    len(provider_parts) >= 5
+                    and provider_parts[1].lower() == "key"
+                    and provider_parts[2].lower() == "set"
+                ):
+                    try:
+                        selection_id = int(provider_parts[3])
+                    except ValueError:
+                        console.print()
+                        render_mira_message("selection_id must be an integer", is_error=True)
+                        console.print()
+                        continue
+
+                    api_key = " ".join(provider_parts[4:]).strip()
+                    if not api_key:
+                        console.print()
+                        render_mira_message("api_key must be non-empty", is_error=True)
+                        console.print()
+                        continue
+
+                    resp = call_action(
+                        token,
+                        "continuum",
+                        "set_provider_key",
+                        {"selection_id": selection_id, "api_key": api_key}
+                    )
+                    if resp.get("success"):
+                        key_name = resp.get("data", {}).get("key_name", f"provider_key_{selection_id}")
+                        console.print()
+                        render_mira_message(f"Stored Vault key {key_name}")
+                        console.print()
+                    else:
+                        console.print()
+                        render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
+                        console.print()
+
+                elif len(provider_parts) == 4 and provider_parts[1].lower() == "use":
+                    tier_name = provider_parts[2].lower()
+                    try:
+                        selection_id = int(provider_parts[3])
+                    except ValueError:
+                        console.print()
+                        render_mira_message("selection_id must be an integer", is_error=True)
+                        console.print()
+                        continue
+
+                    resp = call_action(
+                        token,
+                        "continuum",
+                        "set_tier_provider_selection",
+                        {"tier": tier_name, "selection_id": selection_id}
+                    )
+                    if resp.get("success"):
+                        result = resp.get("data", {})
+                        console.print()
+                        render_mira_message(
+                            f"Updated tier '{result.get('tier', tier_name)}' "
+                            f"to key '{result.get('api_key_name', f'provider_key_{selection_id}')}'."
+                        )
+                        console.print()
+                    else:
+                        console.print()
+                        render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
+                        console.print()
+
+                elif (
+                    len(provider_parts) >= 5
+                    and provider_parts[1].lower() == "model"
+                    and provider_parts[2].lower() == "set"
+                ):
+                    tier_name = provider_parts[3].lower()
+                    model_id = " ".join(provider_parts[4:]).strip()
+                    if not model_id:
+                        console.print()
+                        render_mira_message("model_id must be non-empty", is_error=True)
+                        console.print()
+                        continue
+
+                    resp = call_action(
+                        token,
+                        "continuum",
+                        "set_tier_model",
+                        {"tier": tier_name, "model": model_id}
+                    )
+                    if resp.get("success"):
+                        result = resp.get("data", {})
+                        console.print()
+                        render_mira_message(
+                            f"Updated tier '{result.get('tier', tier_name)}' model to '{result.get('model', model_id)}'."
+                        )
+                        console.print()
+                    else:
+                        console.print()
+                        render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
+                        console.print()
+
+                elif (
+                    len(provider_parts) == 5
+                    and provider_parts[1].lower() == "thinking"
+                    and provider_parts[2].lower() == "set"
+                ):
+                    tier_name = provider_parts[3].lower()
+                    try:
+                        thinking_budget = int(provider_parts[4])
+                    except ValueError:
+                        console.print()
+                        render_mira_message("budget must be an integer >= 0", is_error=True)
+                        console.print()
+                        continue
+
+                    if thinking_budget < 0:
+                        console.print()
+                        render_mira_message("budget must be an integer >= 0", is_error=True)
+                        console.print()
+                        continue
+
+                    resp = call_action(
+                        token,
+                        "continuum",
+                        "set_tier_thinking_budget",
+                        {"tier": tier_name, "thinking_budget": thinking_budget}
+                    )
+                    if resp.get("success"):
+                        result = resp.get("data", {})
+                        console.print()
+                        render_mira_message(
+                            f"Updated tier '{result.get('tier', tier_name)}' "
+                            f"thinking budget to {result.get('thinking_budget', thinking_budget)}."
+                        )
+                        console.print()
+                    else:
+                        console.print()
+                        render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
+                        console.print()
+
+                elif len(provider_parts) == 2 and provider_parts[1].lower() == "reload":
+                    resp = call_action(token, "continuum", "reload_tier_cache", {})
+                    if resp.get("success"):
+                        console.print()
+                        render_mira_message("Tier cache reloaded")
+                        console.print()
+                    else:
+                        console.print()
+                        render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
+                        console.print()
+
+                else:
+                    console.print()
+                    render_mira_message(f"Usage:\n{provider_usage}", is_error=True)
+                    console.print()
+
             elif cmd == "clear":
                 history.clear()
                 render_screen(history, current_tier, available_tiers, enabled_docs=enabled_docs)
@@ -805,9 +1013,6 @@ def chat_loop(token: str) -> None:
                     console.print()
 
             elif cmd == "domaindoc":
-                # Get original (non-lowercased) arg for create description
-                raw_arg = parts[1] if len(parts) > 1 else None
-
                 if not arg:
                     console.print()
                     render_mira_message("/domaindoc list\n/domaindoc create <label> \"<description>\"\n/domaindoc enable <label>\n/domaindoc disable <label>")

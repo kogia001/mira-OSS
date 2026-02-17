@@ -476,7 +476,7 @@ def webapp_index() -> str:
     const sectionContentInput = document.getElementById('sectionContentInput');
     const saveSectionBtn = document.getElementById('saveSectionBtn');
 
-    const COMMAND_HELP_TEXT = '/tier [name] - view or change model tier\\n/domaindoc list|create|enable|disable\\n/collapse - end current conversation segment\\n/status\\n/clear\\nquit, exit, bye';
+    const COMMAND_HELP_TEXT = '/tier [name] - view or change model tier\\n/provider status|key set|use|model set|thinking set|reload\\n/domaindoc list|create|enable|disable\\n/collapse - end current conversation segment\\n/status\\n/clear\\nquit, exit, bye';
 
     let currentPath = '';
     let currentRoot = '';
@@ -821,6 +821,130 @@ def webapp_index() -> str:
       appendBubble('assistant', 'Options: ' + accessibleNames.join(', '));
     }
 
+    async function handleProviderCommand(argRaw) {
+      const usage =
+        '/provider status\\n' +
+        '/provider key set <selection_id> <api_key>\\n' +
+        '/provider use <tier> <selection_id>\\n' +
+        '/provider model set <tier> <model_id>\\n' +
+        '/provider thinking set <tier> <budget>\\n' +
+        '/provider reload';
+
+      const rawArg = (argRaw || '').trim();
+      if (!rawArg) {
+        appendBubble('assistant', usage);
+        return;
+      }
+
+      const parts = rawArg.split(/\\s+/);
+      const sub = (parts[0] || '').toLowerCase();
+
+      if (parts.length === 1 && sub === 'status') {
+        const result = await callAction('continuum', 'get_tier_provider_status', {});
+        const tiers = Array.isArray(result.tiers) ? result.tiers : [];
+        if (tiers.length === 0) {
+          appendBubble('assistant', 'No provider status rows found for tiers fast/balanced/oss.');
+          return;
+        }
+
+        const lines = ['Tier       Provider   Endpoint                         API Key Name       Key Present  Thinking  Model'];
+        lines.push('----------------------------------------------------------------------------------------------------------------');
+        for (const tierInfo of tiers) {
+          const hasKey = tierInfo.has_api_key;
+          const keyPresent = hasKey === true ? 'yes' : hasKey === false ? 'no' : '-';
+          lines.push(
+            String(tierInfo.name || '-').slice(0, 10).padEnd(10) + ' ' +
+            String(tierInfo.provider || '-').slice(0, 10).padEnd(10) + ' ' +
+            String(tierInfo.endpoint_url || '-').slice(0, 32).padEnd(32) + ' ' +
+            String(tierInfo.api_key_name || '-').slice(0, 18).padEnd(18) + ' ' +
+            keyPresent.padEnd(11) + ' ' +
+            String(tierInfo.thinking_budget ?? '-').slice(0, 8).padEnd(8) + ' ' +
+            String(tierInfo.model || '-')
+          );
+        }
+        appendBubble('assistant', lines.join('\\n'));
+        return;
+      }
+
+      if (parts.length >= 4 && sub === 'key' && (parts[1] || '').toLowerCase() === 'set') {
+        const selectionId = Number.parseInt(parts[2], 10);
+        if (!Number.isInteger(selectionId) || selectionId < 1) {
+          appendBubble('assistant', 'selection_id must be an integer >= 1');
+          return;
+        }
+        const apiKey = parts.slice(3).join(' ').trim();
+        if (!apiKey) {
+          appendBubble('assistant', 'api_key must be non-empty');
+          return;
+        }
+        const result = await callAction('continuum', 'set_provider_key', {
+          selection_id: selectionId,
+          api_key: apiKey
+        });
+        const keyName = result.key_name || ('provider_key_' + selectionId);
+        appendBubble('assistant', "Stored API key in Vault as '" + keyName + "'.");
+        return;
+      }
+
+      if (parts.length === 3 && sub === 'use') {
+        const tierName = (parts[1] || '').toLowerCase();
+        const selectionId = Number.parseInt(parts[2], 10);
+        if (!Number.isInteger(selectionId) || selectionId < 1) {
+          appendBubble('assistant', 'selection_id must be an integer >= 1');
+          return;
+        }
+        const result = await callAction('continuum', 'set_tier_provider_selection', {
+          tier: tierName,
+          selection_id: selectionId
+        });
+        const keyName = result.api_key_name || ('provider_key_' + selectionId);
+        appendBubble('assistant', "Updated tier '" + (result.tier || tierName) + "' to key '" + keyName + "'.");
+        return;
+      }
+
+      if (parts.length >= 4 && sub === 'model' && (parts[1] || '').toLowerCase() === 'set') {
+        const tierName = (parts[2] || '').toLowerCase();
+        const modelId = parts.slice(3).join(' ').trim();
+        if (!modelId) {
+          appendBubble('assistant', 'model_id must be non-empty');
+          return;
+        }
+        const result = await callAction('continuum', 'set_tier_model', {
+          tier: tierName,
+          model: modelId
+        });
+        appendBubble('assistant', "Updated tier '" + (result.tier || tierName) + "' model to '" + (result.model || modelId) + "'.");
+        return;
+      }
+
+      if (parts.length === 4 && sub === 'thinking' && (parts[1] || '').toLowerCase() === 'set') {
+        const tierName = (parts[2] || '').toLowerCase();
+        const thinkingBudget = Number.parseInt(parts[3], 10);
+        if (!Number.isInteger(thinkingBudget) || thinkingBudget < 0) {
+          appendBubble('assistant', 'budget must be an integer >= 0');
+          return;
+        }
+        const result = await callAction('continuum', 'set_tier_thinking_budget', {
+          tier: tierName,
+          thinking_budget: thinkingBudget
+        });
+        appendBubble(
+          'assistant',
+          "Updated tier '" + (result.tier || tierName) + "' thinking budget to " +
+          String(result.thinking_budget ?? thinkingBudget) + '.'
+        );
+        return;
+      }
+
+      if (parts.length === 1 && sub === 'reload') {
+        await callAction('continuum', 'reload_tier_cache', {});
+        appendBubble('assistant', 'Tier cache reloaded');
+        return;
+      }
+
+      appendBubble('assistant', 'Usage:\\n' + usage);
+    }
+
     function parseDomaindocCreateArg(rawArg) {
       const createExpr = rawArg.trim().slice('create '.length).trim();
       const match = createExpr.match(/^([A-Za-z0-9_]+)\\s+\"([\\s\\S]+)\"$/);
@@ -911,6 +1035,10 @@ def webapp_index() -> str:
       }
       if (cmd === 'tier') {
         await handleTierCommand(argRaw);
+        return;
+      }
+      if (cmd === 'provider') {
+        await handleProviderCommand(argRaw);
         return;
       }
       if (cmd === 'clear') {

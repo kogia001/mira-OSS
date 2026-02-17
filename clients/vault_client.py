@@ -150,6 +150,26 @@ def get_api_key(key_name: str) -> str:
     return value
 
 
+def set_api_key(key_name: str, value: str) -> None:
+    """Patch a single API key field in Vault KV v2 and refresh process cache."""
+    vault_client = _ensure_vault_client()
+    vault_client.client.secrets.kv.v2.patch(
+        path='mira/api_keys',
+        secret={key_name: value}
+    )
+    _secret_cache[f"mira/api_keys/{key_name}"] = value
+
+
+def has_api_key(key_name: str) -> bool:
+    """Check whether an API key field exists in Vault without caching misses."""
+    vault_client = _ensure_vault_client()
+    try:
+        vault_client.get_secret('mira/api_keys', key_name)
+        return True
+    except (KeyError, FileNotFoundError, PermissionError, RuntimeError, VaultError):
+        return False
+
+
 def get_auth_secret(secret_name: str) -> str:
     cache_key = f"mira/auth/{secret_name}"
     
