@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from uuid import UUID
 
 from cns.core.message import Message
 from clients.valkey_client import ValkeyClient
@@ -86,18 +87,18 @@ class ValkeyMessageCache:
         serialized = json.loads(data)
         
         for msg_dict in serialized:
-            # Parse created_at if present
-            created_at = None
+            # Build kwargs, only including created_at when present
+            # (omitting it lets Message's default_factory=utc_now provide the value)
+            msg_kwargs = {
+                'id': UUID(msg_dict['id']),
+                'content': msg_dict['content'],
+                'role': msg_dict['role'],
+                'metadata': msg_dict.get('metadata', {}),
+            }
             if msg_dict.get('created_at'):
-                created_at = parse_utc_time_string(msg_dict['created_at'])
-            
-            message = Message(
-                id=msg_dict['id'],
-                content=msg_dict['content'],
-                role=msg_dict['role'],
-                created_at=created_at,
-                metadata=msg_dict.get('metadata', {})
-            )
+                msg_kwargs['created_at'] = parse_utc_time_string(msg_dict['created_at'])
+
+            message = Message(**msg_kwargs)
             messages.append(message)
         
         return messages

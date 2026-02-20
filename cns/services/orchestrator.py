@@ -11,6 +11,7 @@ import ast
 import json
 import os
 import re
+import contextvars
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
@@ -1417,6 +1418,7 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
             messages: Full message list for analysis
         """
         import concurrent.futures
+        judgment_ctx = contextvars.copy_context()
 
         def _run_judgment_sync():
             """Synchronous wrapper for LLM judgment."""
@@ -1431,7 +1433,8 @@ Respond with ONLY the boundary number (1-{len(candidate_cuts)}) or "NONE" if no 
         # Run in thread pool to not block
         try:
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            executor.submit(_run_judgment_sync)
+            executor.submit(judgment_ctx.run, _run_judgment_sync)
+            executor.shutdown(wait=False)
         except Exception as e:
             logger.warning(f"Failed to schedule async judgment: {e}")
 

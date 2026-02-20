@@ -125,6 +125,10 @@ class PostgresClient:
             raise Exception(f"Database connection pool exhausted for {self.database_name}")
         finally:
             if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 pool.putconn(conn)
     
     
@@ -373,10 +377,10 @@ class PostgresClient:
                 return results
     
     def close_pool(self):
-        if self.database_name in cls._connection_pools:
-            pool = cls._connection_pools[self.database_name]
+        if self.database_name in self.__class__._connection_pools:
+            pool = self.__class__._connection_pools[self.database_name]
             pool.closeall()
-            del cls._connection_pools[self.database_name]
+            del self.__class__._connection_pools[self.database_name]
             logger.info(f"Connection pool closed: {self.database_name}")
     
     @classmethod

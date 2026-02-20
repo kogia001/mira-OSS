@@ -6,6 +6,7 @@ Integrates CNS events with existing MIRA components for system coordination.
 """
 
 import logging
+import os
 from typing import List, Callable, Dict, Any, Optional, Tuple
 import threading
 
@@ -15,6 +16,7 @@ from ..core.events import (
 )
 
 logger = logging.getLogger(__name__)
+RAISE_ON_SUBSCRIBER_ERROR = os.getenv("MIRA_EVENTBUS_FAILFAST", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class EventBus:
@@ -65,6 +67,8 @@ class EventBus:
                     callback(event)
                 except Exception as e:
                     logger.error(f"Error in event subscriber for {event_type}: {e}")
+                    if RAISE_ON_SUBSCRIBER_ERROR:
+                        raise
                     
         logger.debug(f"Event {event_type} published to {len(self._subscribers.get(event_type, []))} subscribers")
     

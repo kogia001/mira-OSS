@@ -135,6 +135,8 @@ class Continuum:
         for message in self.messages:  # This uses the property which handles cache loading
             # Format content based on message type
             content = message.content
+            if isinstance(content, list):
+                content = [block.copy() for block in content]
 
             # Apply display formatting for collapsed segments
             if (message.metadata.get('is_segment_boundary') and
@@ -177,7 +179,7 @@ class Continuum:
                 # User message with content blocks (multimodal)
                 formatted_messages.append({
                     "role": "user",
-                    "content": message.content  # Keep original for multimodal
+                    "content": content  # Keep original for multimodal
                 })
             else:
                 # Standard text message

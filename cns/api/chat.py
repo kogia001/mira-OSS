@@ -118,7 +118,8 @@ class ChatEndpoint(BaseHandler):
                 raise ValidationError(f"Invalid base64 document: {str(e)}")
 
         # Concurrency control: one active request per user
-        if not _user_request_lock.acquire(user_id):
+        lock_token = _user_request_lock.acquire(user_id)
+        if not lock_token:
             # Use a validation error to preserve consistent error envelope
             raise ValidationError("Another chat request is already in progress for this user")
 
@@ -272,7 +273,7 @@ class ChatEndpoint(BaseHandler):
 
         finally:
             # Note: File cleanup happens on segment collapse, not per-request
-            _user_request_lock.release(user_id)
+            _user_request_lock.release(user_id, lock_token)
 
 
 @router.post("/chat")

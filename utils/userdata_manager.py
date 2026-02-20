@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from uuid import UUID
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
 
@@ -291,12 +291,19 @@ class UserDataManager:
         try:
             decrypted_bytes = self.fernet.decrypt(encrypted_str.encode())
             return json.loads(decrypted_bytes.decode())
-        except Exception:
-            # Fallback for unencrypted data (migration scenario)
+        except InvalidToken as exc:
+            # Fallback for unencrypted legacy values only.
+            # If the payload looks like a Fernet token, fail loudly.
+            if isinstance(encrypted_str, str) and encrypted_str.startswith("gAAAAA"):
+                raise RuntimeError(
+                    "Failed to decrypt encrypted user data; session key may be rotated or data is corrupted."
+                ) from exc
             try:
                 return json.loads(encrypted_str)
             except json.JSONDecodeError:
                 return encrypted_str
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Decrypted user data payload is invalid JSON.") from exc
     
     def _encrypt_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Encrypt fields with encrypted__ prefix (prefix is kept in column name)."""
@@ -323,11 +330,7 @@ class UserDataManager:
         result = {}
         for key, value in data.items():
             if key.startswith("encrypted__") and value is not None:
-                try:
-                    result[key] = self._decrypt_value(value)
-                except Exception:
-                    # Decryption failed, use as-is
-                    result[key] = value
+                result[key] = self._decrypt_value(value)
             else:
                 result[key] = value
         return result

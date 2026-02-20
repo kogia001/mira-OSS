@@ -181,6 +181,10 @@ class ValkeyClient:
         result = self._client.delete(key)
         return result > 0
 
+    def eval(self, script: str, numkeys: int, *keys_and_args):
+        """Execute a Lua script (used for lock release compare-and-delete)."""
+        return self._client.eval(script, numkeys, *keys_and_args)
+
     def exists(self, key: str) -> bool:
         """
         Check if key exists.

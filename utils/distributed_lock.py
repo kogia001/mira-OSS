@@ -24,6 +24,15 @@ class DistributedLock:
     Ensures only one process can hold a lock for a given resource at a time,
     with automatic expiration to prevent deadlocks from crashed processes.
     """
+
+    # Lua script for atomic compare-and-delete (ownership-verified release)
+    _RELEASE_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+"""
     
     def __init__(self, lock_prefix: str = "lock:", default_ttl: int = 60):
         """
@@ -48,7 +57,7 @@ class DistributedLock:
             self.valkey = None
             self._degraded_mode = True
     
-    def acquire(self, resource_id: str, ttl: Optional[int] = None, lock_value: Optional[str] = None) -> bool:
+    def acquire(self, resource_id: str, ttl: Optional[int] = None, lock_value: Optional[str] = None) -> Optional[str]:
         """
         Attempt to acquire a distributed lock.
 
@@ -61,7 +70,7 @@ class DistributedLock:
             lock_value: Optional value to store with lock (for debugging)
 
         Returns:
-            True if lock was acquired, False if already locked
+            Lock token string if acquired, None if already locked
 
         Raises:
             Exception: If Valkey is unavailable (infrastructure failure)
@@ -75,10 +84,10 @@ class DistributedLock:
             with self._local_guard:
                 current = self._local_locks.get(key)
                 if current and current[1] > now:
-                    return False
+                    return None
                 self._local_locks[key] = (lock_value, now + ttl)
             logger.debug(f"Acquired local lock for {resource_id} with TTL {ttl}s")
-            return True
+            return lock_value
 
         # SET NX (set if not exists) with EX (expiration)
         # This is atomic - either we get the lock or we don't
@@ -91,10 +100,10 @@ class DistributedLock:
 
         if success:
             logger.debug(f"Acquired lock for {resource_id} with TTL {ttl}s")
+            return lock_value
         else:
             logger.debug(f"Failed to acquire lock for {resource_id} - already locked")
-
-        return bool(success)
+            return None
     
     def get_lock_owner(self, resource_id: str) -> Optional[str]:
         """
@@ -138,15 +147,18 @@ class DistributedLock:
         logger.warning(f"Force releasing lock for {resource_id}")
         return self.release(resource_id)
     
-    def release(self, resource_id: str) -> bool:
+    def release(self, resource_id: str, token: Optional[str] = None) -> bool:
         """
-        Release a distributed lock.
+        Release a distributed lock with ownership verification.
 
         Args:
             resource_id: Unique identifier for the resource to unlock
+            token: Lock token from acquire(). If provided, only releases if
+                   the current lock value matches (prevents releasing another
+                   caller's lock). If None, releases unconditionally (legacy).
 
         Returns:
-            True if lock was released, False if lock didn't exist
+            True if lock was released, False if lock didn't exist or token mismatch
 
         Raises:
             Exception: If Valkey is unavailable (infrastructure failure)
@@ -154,16 +166,28 @@ class DistributedLock:
         key = f"{self.lock_prefix}{resource_id}"
         if self._degraded_mode:
             with self._local_guard:
+                if token is not None:
+                    current = self._local_locks.get(key)
+                    if current and current[0] == token:
+                        del self._local_locks[key]
+                        return True
+                    return False
                 return self._local_locks.pop(key, None) is not None
 
-        deleted = self.valkey.delete(key)
+        if token is not None:
+            # Atomic compare-and-delete via Lua script
+            result = self.valkey.eval(self._RELEASE_SCRIPT, 1, key, token)
+            released = bool(result)
+        else:
+            # Legacy unconditional release
+            released = bool(self.valkey.delete(key))
 
-        if deleted:
+        if released:
             logger.debug(f"Released lock for {resource_id}")
         else:
-            logger.debug(f"No lock to release for {resource_id}")
+            logger.debug(f"No lock to release for {resource_id} (not found or token mismatch)")
 
-        return bool(deleted)
+        return released
     
     def is_locked(self, resource_id: str) -> bool:
         """
@@ -238,15 +262,15 @@ class DistributedLock:
         Yields:
             None if lock acquired successfully
         """
-        acquired = False
+        token = None
         try:
-            acquired = self.acquire(resource_id, ttl)
-            if not acquired:
+            token = self.acquire(resource_id, ttl)
+            if not token:
                 raise LockAcquisitionError(f"Could not acquire lock for {resource_id}")
             yield
         finally:
-            if acquired:
-                self.release(resource_id)
+            if token:
+                self.release(resource_id, token)
 
 
 class LockAcquisitionError(Exception):
@@ -274,7 +298,7 @@ class UserRequestLock:
     
     
     
-    def acquire(self, user_id: str) -> bool:
+    def acquire(self, user_id: str) -> Optional[str]:
         """
         Attempt to acquire lock for user.
         
@@ -282,27 +306,28 @@ class UserRequestLock:
             user_id: User identifier
         
         Returns:
-            True if lock acquired, False if user has concurrent request
+            Lock token string if acquired, None if user has concurrent request
         """
-        success = self.lock.acquire(user_id, ttl=self.default_ttl)
-        if success:
+        token = self.lock.acquire(user_id, ttl=self.default_ttl)
+        if token:
             logger.debug(f"Acquired lock for user {user_id} (TTL: {self.default_ttl}s)")
         else:
             logger.debug(f"Failed to acquire lock for user {user_id} - concurrent request in progress")
-        return success
+        return token
     
     
-    def release(self, user_id: str) -> bool:
+    def release(self, user_id: str, token: Optional[str] = None) -> bool:
         """
         Release lock for user.
         
         Args:
             user_id: User identifier
+            token: Lock token from acquire(). Prevents releasing another request's lock.
         
         Returns:
             True if lock was released
         """
-        return self.lock.release(user_id)
+        return self.lock.release(user_id, token)
     
     def is_locked(self, user_id: str) -> bool:
         """

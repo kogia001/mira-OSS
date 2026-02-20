@@ -14,6 +14,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -1173,17 +1174,17 @@ def webapp_index() -> str:
     function renderRows(payload) {
       if (payload.parent_path !== null) {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td><button class="name-btn" data-open="' + payload.parent_path + '">..</button></td><td>dir</td><td>-</td><td>-</td><td>-</td>';
+        tr.innerHTML = '<td><button class="name-btn" data-open="' + escapeHtml(payload.parent_path) + '">..</button></td><td>dir</td><td>-</td><td>-</td><td>-</td>';
         rowsEl.appendChild(tr);
       }
 
       for (const entry of payload.entries) {
         const tr = document.createElement('tr');
         const openBtn = entry.type === 'dir'
-          ? '<button class="name-btn" data-open="' + entry.path + '">' + escapeHtml(entry.name) + '/</button>'
+          ? '<button class="name-btn" data-open="' + escapeHtml(entry.path) + '">' + escapeHtml(entry.name) + '/</button>'
           : '<span class="mono">' + escapeHtml(entry.name) + '</span>';
         const actionBtn = entry.type === 'file'
-          ? '<button data-download="' + entry.path + '">Download</button>'
+          ? '<button data-download="' + escapeHtml(entry.path) + '">Download</button>'
           : '-';
         tr.innerHTML =
           '<td>' + openBtn + '</td>' +
@@ -1763,5 +1764,17 @@ def download_code_execution_artifact(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed reading artifact payload: {exc}") from exc
 
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    # Prevent header injection and provide RFC 5987 UTF-8 filename support.
+    ascii_filename = "".join(
+        ch if 32 <= ord(ch) < 127 and ch not in {'"', "\\", ";"} else "_"
+        for ch in filename
+    ).strip(" .")
+    if not ascii_filename:
+        ascii_filename = "artifact"
+    encoded_filename = quote(filename, safe="")
+    headers = {
+        "Content-Disposition": (
+            f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}"
+        )
+    }
     return Response(content=payload, media_type=media_type, headers=headers)

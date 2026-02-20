@@ -87,7 +87,11 @@ class RetryMixin:
         
         for attempt in range(self.max_retries + 1):
             try:
-                return request_func(*args, **kwargs)
+                response = request_func(*args, **kwargs)
+                # Raise for retryable status codes so the retry loop can catch them
+                if hasattr(response, 'status_code') and self._should_retry(response.status_code, attempt):
+                    response.raise_for_status()
+                return response
                 
             except HTTPStatusError as e:
                 last_exception = e
@@ -254,7 +258,11 @@ class AsyncClient(RetryMixin, httpx.AsyncClient):
         
         for attempt in range(self.max_retries + 1):
             try:
-                return await request_func(*args, **kwargs)
+                response = await request_func(*args, **kwargs)
+                # Raise for retryable status codes so the retry loop can catch them
+                if hasattr(response, 'status_code') and self._should_retry(response.status_code, attempt):
+                    response.raise_for_status()
+                return response
                 
             except HTTPStatusError as e:
                 last_exception = e

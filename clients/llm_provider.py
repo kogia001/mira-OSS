@@ -545,7 +545,14 @@ class LLMProvider:
 
         # Streaming path: iterate events and forward to callback
         final_response: Optional[anthropic.types.Message] = None
-        for event in self.stream_events(messages, tools, **kwargs):
+        for event in self.stream_events(
+            messages, tools,
+            endpoint_url=endpoint_url,
+            model_override=model_override,
+            api_key_override=api_key_override,
+            system_override=system_override,
+            **kwargs
+        ):
             # Capture completion
             if isinstance(event, CompleteEvent):
                 final_response = event.response
@@ -605,6 +612,11 @@ class LLMProvider:
             endpoint_url = kwargs.get('endpoint_url')
             model_override = kwargs.get('model_override')
             if endpoint_url:
+                if not model_override:
+                    raise ValueError(
+                        "When using endpoint_url, model_override must be provided. "
+                        "Generic provider calls require an explicit model identifier."
+                    )
                 # Agentic loop for generic providers with real-time streaming
                 current_messages = list(messages)  # Copy to avoid mutating original
                 circuit_breaker = CircuitBreaker()
@@ -616,6 +628,9 @@ class LLMProvider:
                 while True:
                     # Prepare for streaming
                     system_prompt, prepared_messages = self._prepare_messages(current_messages)
+                    system_override = kwargs.get('system_override')
+                    if system_override:
+                        system_prompt = system_override
 
                     # Strip unsupported features from tools
                     generic_tools = None

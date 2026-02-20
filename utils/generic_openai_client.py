@@ -255,13 +255,7 @@ class GenericOpenAIClient:
                     headers["x-api-key"] = self.api_key
                     headers.setdefault("anthropic-version", "2023-06-01")
                 else:
-                    # Auth: Anthropic uses x-api-key (+ anthropic-version); others use Bearer
-                    if "anthropic.com" in (self.endpoint or ""):
-                        headers.pop("Authorization", None)
-                        headers["x-api-key"] = self.api_key
-                        headers.setdefault("anthropic-version", "2023-06-01")
-                    else:
-                        headers["Authorization"] = f"Bearer {self.api_key}"
+                    headers["Authorization"] = f"Bearer {self.api_key}"
 
             response = requests.post(
                 self.endpoint,
@@ -368,13 +362,7 @@ class GenericOpenAIClient:
                 headers["x-api-key"] = self.api_key
                 headers.setdefault("anthropic-version", "2023-06-01")
             else:
-                # Auth: Anthropic uses x-api-key (+ anthropic-version); others use Bearer
-                if "anthropic.com" in (self.endpoint or ""):
-                    headers.pop("Authorization", None)
-                    headers["x-api-key"] = self.api_key
-                    headers.setdefault("anthropic-version", "2023-06-01")
-                else:
-                    headers["Authorization"] = f"Bearer {self.api_key}"
+                headers["Authorization"] = f"Bearer {self.api_key}"
 
         logger.debug(f"Starting streaming request to {self.endpoint}")
 

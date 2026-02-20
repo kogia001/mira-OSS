@@ -2,112 +2,14 @@
   {
     "dependencies": [],
     "description": "Base class for all tools",
-    "name": "codex_wsl",
+    "name": "mock_gated_tool",
     "parameters": {},
     "required_parameters": []
   },
   {
     "dependencies": [],
     "description": "Base class for all tools",
-    "name": "contacts_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "continuum_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "domaindoc_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "\n    Email management tool that provides access to email accounts via IMAP/SMTP protocols. \n    Use this tool to read, search, send, and manage emails.\n    \n    OPERATIONS:\n    - get_emails: Retrieve emails from specified folder with options for filtering and content loading\n      Parameters:\n        folder (optional, default=\"INBOX\"): Email folder to access\n        unread_only (optional, default=False): Set to True to only return unread emails\n        load_content (optional, default=True): Set to True to load full email content\n        sender (optional): Filter by sender email or name\n        max_emails (optional, default=20): Maximum number of emails to return\n    \n    - get_email_content: Get full content of a specific email\n      Parameters:\n        email_id (required): UUID of the email to retrieve\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n    \n    - mark_as_read: Mark an email as read\n      Parameters:\n        email_id (required): UUID of the email to mark\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n    \n    - mark_as_unread: Mark an email as unread\n      Parameters:\n        email_id (required): UUID of the email to mark\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n    \n    - delete_email: Delete an email\n      Parameters:\n        email_id (required): UUID of the email to delete\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n    \n    - move_email: Move an email to another folder\n      Parameters:\n        email_id (required): UUID of the email to move\n        destination_folder (required): Folder to move the email to\n        folder (optional, default=\"INBOX\"): Source folder containing the email\n    \n    - send_email: Send a new email\n      Parameters:\n        to (required): Recipient email address(es)\n        subject (required): Email subject\n        body (required): Email body content\n        cc (optional): CC recipient(s)\n        bcc (optional): BCC recipient(s)\n    \n    - reply_to_email: Reply to an existing email\n      Parameters:\n        email_id (required): UUID of the email to reply to\n        body (required): Reply content\n        folder (optional, default=\"INBOX\"): Email folder containing the email\n        cc (optional): CC recipient(s)\n        bcc (optional): BCC recipient(s)\n        \n    - create_draft: Create a draft email without sending\n      Parameters:\n        to (required): Recipient email address(es)\n        subject (required): Email subject\n        body (required): Email body content\n        cc (optional): CC recipient(s)\n        bcc (optional): BCC recipient(s)\n    \n    - search_emails: Search emails with various criteria\n      Parameters:\n        folder (optional, default=\"INBOX\"): Email folder to search in\n        sender (optional): Sender email or name to search for\n        subject (optional): Subject text to search for\n        start_date (optional): Start date for range search (DD-Mon-YYYY format)\n        end_date (optional): End date for range search (DD-Mon-YYYY format)\n        unread_only (optional, default=False): Set to True to only return unread emails\n        load_content (optional, default=True): Set to True to load full email content\n        max_emails (optional, default=20): Maximum number of emails to return\n        \n    - list_folders: List available email folders\n      Parameters: None\n      \n    - mark_for_later_reply: Mark an email to be replied to later in the continuum\n      Parameters:\n        email_id (required): UUID of the email to mark\n        \n    - get_emails_for_later_reply: Get list of emails marked for later reply\n      Parameters: None\n    \n    USAGE NOTES:\n    - Emails are loaded with full content by default to enable intelligent categorization\n    - The LLM should categorize emails into groups like: from humans, priority, notifications, newsletters\n    - Use the email_id to reference specific emails throughout the continuum\n    - For handling multiple emails efficiently, process them by category\n    - Mark emails for later reply to keep track of emails the user wants to address during the continuum\n    ",
-    "name": "email_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "getcontext_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "invokeother_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "kasa_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Location services: geocoding, place details, nearby search, and distance calculation",
-    "name": "maps_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Read/search markdown notes and create notes within allowed root directories.",
-    "name": "notes_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "\n    Manages virtual pager devices for sending and receiving short messages. Use this tool when the user\n    wants to simulate pager messaging, send urgent notifications, or manage a virtual pager system.\n    \n    IMPORTANT: This tool requires parameters to be passed as a JSON string in the \"kwargs\" field.\n    The tool supports these operations:\n    \n    1. register_device: Create a new virtual pager device.\n       - Required: name (friendly name for the pager)\n       - Optional: description (details about the pager)\n       - Returns the created pager device with unique ID (format: PAGER-XXXX)\n\n    2. register_username: Register a username for federated pager addressing.\n       - Required: username (3-20 alphanumeric characters, e.g., \"taylor\")\n       - One username per user - enables receiving federated messages and local username routing\n       - Returns the registered username and federated address (username@server)\n\n    3. send_message: Send a message from one pager to another.\n       - Required: sender_id, recipient_id, content\n       - Optional: priority (0=normal, 1=high, 2=urgent), location, expiry_hours\n       - Content over 300 chars will be AI-distilled to fit pager constraints\n       - Returns the sent message details\n    \n    3. get_received_messages: Get messages received by a specific pager.\n       - Required: pager_id (the pager device ID)\n       - Optional: unread_only (boolean), include_expired (boolean)\n       - Returns list of received messages\n    \n    4. get_sent_messages: Get messages sent from a specific pager.\n       - Required: pager_id (the pager device ID)\n       - Optional: include_expired (boolean)\n       - Returns list of sent messages\n       \n    5. mark_message_read: Mark a message as read.\n       - Required: message_id\n       - Returns the updated message\n       \n    6. get_devices: List all registered pager devices.\n       - Optional: active_only (boolean, default true)\n       - Returns list of pager devices\n       \n    7. deactivate_device: Deactivate a pager device.\n       - Required: pager_id\n       - Returns confirmation of deactivation\n       \n    8. cleanup_expired: Remove expired messages from the system.\n       - Returns count of messages cleaned up\n    \n    9. list_trusted_devices: List devices trusted by a specific pager.\n       - Required: pager_id\n       - Returns list of trusted devices with fingerprints and status\n       \n    10. revoke_trust: Revoke trust for a specific device (allows re-establishing trust).\n        - Required: pager_id, untrusted_device_id\n        - Returns confirmation of trust revocation\n        \n    11. send_location: Send a location pin message from one pager to another.\n        - Required: sender_id, recipient_id\n        - Optional: priority (0=normal, 1=high, 2=urgent), message (brief note), device_secret\n        - Automatically includes current location as a pin\n        - Returns the sent location message\n       \n    The tool uses AI to automatically distill long messages to fit pager constraints while\n    preserving the essential information. Location information can be attached to messages\n    for context, and priority levels help indicate message urgency.\n    \n    Location pins are a special feature that allow sending your current coordinates as a \n    message, perfect for emergencies or meetups. The location is formatted with both a \n    human-readable address and technical coordinates.\n    ",
-    "name": "pager_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "punchclock_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "reminder_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "timezone_manager",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "weather_tool",
-    "parameters": {},
-    "required_parameters": []
-  },
-  {
-    "dependencies": [],
-    "description": "Web search, fetch webpages, and HTTP requests",
-    "name": "web_tool",
+    "name": "mock_always_available",
     "parameters": {},
     "required_parameters": []
   }
